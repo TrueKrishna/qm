@@ -12,6 +12,7 @@ import {
   CORE_ORG_ID as ORG,
   CORE_SIGNING_SECRET,
   PORTAL_IDENTITY_SECRET,
+  externalExecutionFromEnv,
   portFromEnv,
 } from "../../chassis/src/env.ts";
 import { readFileSync } from "node:fs";
@@ -20,15 +21,7 @@ import { dirname, join } from "node:path";
 
 const PORT = portFromEnv(8090);
 const ADMIN_BASE_PATH = (process.env.ADMIN_BASE_PATH ?? "").replace(/\/$/, "");
-const externalExecutionUrl = /^\/(?!\/)/.test(process.env.EXTERNAL_EXECUTION_URL ?? "")
-  ? process.env.EXTERNAL_EXECUTION_URL!
-  : undefined;
-const externalExecution = externalExecutionUrl
-  ? {
-      url: externalExecutionUrl,
-      label: (process.env.EXTERNAL_EXECUTION_LABEL ?? "External workbench").trim().slice(0, 80),
-    }
-  : null;
+const externalExecution = externalExecutionFromEnv();
 function signedHeaders(method: string, corePath: string, rawBody: string): Record<string, string> {
   return signedRequestHeaders(CORE_SIGNING_SECRET, method, corePath, rawBody, { "content-type": "application/json" });
 }

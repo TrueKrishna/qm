@@ -25,6 +25,7 @@ process.env.EXTERNAL_EXECUTION_LABEL = "BBG Workbench";
 
 const { server } = await import("../src/index.ts");
 const { deriveKey, seal } = await import("../src/session.ts");
+const { externalExecutionFromEnv } = await import("../../chassis/src/env.ts");
 await new Promise<void>((resolve) => server.listen(0, resolve));
 const base = `http://localhost:${(server.address() as AddressInfo).port}`;
 const sessionKey = deriveKey("external-execution-portal-secret", "portal.session.v1");
@@ -38,12 +39,19 @@ test.after(() => {
 
 test("external execution mode replaces the assistant with an explicit workbench handoff", async () => {
   const response = await fetch(`${base}/`, { headers: { accept: "text/html", cookie }, redirect: "manual" });
-  assert.equal(response.status, 503);
+  assert.equal(response.status, 200);
   const html = await response.text();
   assert.match(html, /BBG Workbench/);
   assert.match(html, /execution happens on the enrolled BBG Workbench/i);
   assert.match(html, /href="\/programme"/);
   assert.doesNotMatch(html, /add(?:ing)? a model API key/i);
+});
+
+test("external execution configuration rejects unsafe URLs and empty labels", () => {
+  for (const url of ["", "   ", "https://other.example/programme", "//other.example/programme", "/\\other.example"]) {
+    assert.throws(() => externalExecutionFromEnv(url, "Workbench"), /EXTERNAL_EXECUTION_URL/);
+  }
+  assert.throws(() => externalExecutionFromEnv("/programme", "   "), /EXTERNAL_EXECUTION_LABEL/);
 });
 
 test("external execution mode refuses model turn APIs instead of returning canned responses", async () => {
@@ -58,4 +66,10 @@ test("external execution mode refuses model turn APIs instead of returning canne
     message: "Assistant execution happens on the enrolled BBG Workbench.",
     url: "/programme",
   });
+});
+
+test("external execution mode gives HEAD the healthy handoff status without a body", async () => {
+  const response = await fetch(`${base}/`, { method: "HEAD", headers: { accept: "text/html", cookie } });
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), "");
 });

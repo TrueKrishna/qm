@@ -300,6 +300,7 @@ export function dockerServiceEnv(config: QmConfig, service: ServiceName): Record
       }),
     );
   }
+  Object.assign(out, config.env[service]);
   return out;
 }
 
@@ -326,7 +327,7 @@ function serviceEnv(ctx: DockerCtx, service: ServiceName): Record<string, string
   const env = {
     ...out,
     ...virtualEnv,
-    ...config.env[service],
+    ...(service === "core" ? config.env[service] : {}),
     ...(service === "core" ? securityScreenEnv(config) : {}),
     ...secretValues(ctx, service),
   };

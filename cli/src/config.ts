@@ -177,7 +177,8 @@ export function portalPluginRoutesEnv(
   upstreamBaseFor: (plugin: string) => string,
 ): string | undefined {
   const routes = [...(config.portalRoutes ?? [])].sort(
-    (left, right) => right.pathPrefix.length - left.pathPrefix.length || left.pathPrefix.localeCompare(right.pathPrefix),
+    (left, right) =>
+      right.pathPrefix.length - left.pathPrefix.length || left.pathPrefix.localeCompare(right.pathPrefix),
   );
   if (!routes.length) return undefined;
   return JSON.stringify(
@@ -571,6 +572,25 @@ function validate(raw: unknown, path: string): QmConfig {
   const portalRoutes = validatePortalRoutes(o["portalRoutes"], path, services, plugins);
   const skills = validateStringArray(o["skills"], path, "skills");
   const env = validateServiceMap(o["env"], path, "env", (v, k) => validateStringMap(v, path, `env.${k}`));
+  const externalExecution = ["EXTERNAL_EXECUTION_URL", "EXTERNAL_EXECUTION_LABEL"] as const;
+  if (externalExecution.some((name) => env.portal?.[name] !== undefined || env.admin?.[name] !== undefined)) {
+    if (!services.includes("portal") || !services.includes("admin")) {
+      throw new CliError(`${path}: external execution requires both portal and admin services`);
+    }
+    for (const name of externalExecution) {
+      const portalValue = env.portal?.[name]?.trim();
+      const adminValue = env.admin?.[name]?.trim();
+      if (!portalValue || !adminValue || portalValue !== adminValue) {
+        throw new CliError(`${path}: env.portal.${name} and env.admin.${name} must both be set and match`);
+      }
+    }
+    const url = env.portal!.EXTERNAL_EXECUTION_URL!;
+    const base = new URL("https://portal.invalid");
+    const resolved = new URL(url, base);
+    if (!url.startsWith("/") || url.startsWith("//") || url.includes("\\") || resolved.origin !== base.origin) {
+      throw new CliError(`${path}: EXTERNAL_EXECUTION_URL must be a same-origin absolute path`);
+    }
+  }
   const secretEnv = validateServiceMap(o["secretEnv"], path, "secretEnv", (v, k) => {
     const entries = validateStringMap(v, path, `secretEnv.${k}`);
     for (const [envName, storeName] of Object.entries(entries)) {
@@ -655,7 +675,9 @@ function validate(raw: unknown, path: string): QmConfig {
     }
   }
   if (env.portal?.PORTAL_PLUGIN_ROUTES !== undefined) {
-    throw new CliError(`${path}: "env.portal.PORTAL_PLUGIN_ROUTES" is managed by portalRoutes and cannot be overridden`);
+    throw new CliError(
+      `${path}: "env.portal.PORTAL_PLUGIN_ROUTES" is managed by portalRoutes and cannot be overridden`,
+    );
   }
   const imageOverrides = validateServiceMap(o["imageOverrides"], path, "imageOverrides", (v, k) => {
     if (typeof v !== "string") throw new CliError(`${path}: "imageOverrides.${k}" must be a string`);
@@ -771,7 +793,9 @@ function validatePortalRoutes(
       !/^\/[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*$/.test(pathPrefix) ||
       /%2f|%5c/i.test(pathPrefix)
     ) {
-      throw new CliError(`${path}: ${field}.pathPrefix must be a normalized absolute path prefix without encoded separators`);
+      throw new CliError(
+        `${path}: ${field}.pathPrefix must be a normalized absolute path prefix without encoded separators`,
+      );
     }
     if (BUILT_IN_PORTAL_PREFIXES.some((builtIn) => builtIn !== "/" && portalPrefixesOverlap(pathPrefix, builtIn))) {
       throw new CliError(`${path}: ${field}.pathPrefix collides with a built-in portal route`);

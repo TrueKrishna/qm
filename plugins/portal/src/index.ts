@@ -47,6 +47,7 @@ import {
   CORE_ORG_ID as ORG,
   CORE_SIGNING_SECRET,
   PORTAL_IDENTITY_SECRET,
+  externalExecutionFromEnv,
   portFromEnv,
 } from "../../chassis/src/env.ts";
 
@@ -72,10 +73,7 @@ const LOCAL_AUTH_BYPASS = LOCAL_AUTH_BYPASS_REQUESTED && !IS_PROD && isLocalPort
 const LOCAL_AUTH_PRINCIPAL = process.env.PORTAL_DEV_PRINCIPAL || process.env.USER || "dev-admin";
 const DEPLOYMENTS_ENABLED = process.env.PORTAL_DEPLOYMENTS_ENABLED === "1";
 const PLAYGROUND = process.env.PORTAL_PLAYGROUND === "1";
-const EXTERNAL_EXECUTION_URL = /^\/(?!\/)/.test(process.env.EXTERNAL_EXECUTION_URL ?? "")
-  ? process.env.EXTERNAL_EXECUTION_URL!
-  : undefined;
-const EXTERNAL_EXECUTION_LABEL = (process.env.EXTERNAL_EXECUTION_LABEL ?? "External workbench").trim().slice(0, 80);
+const EXTERNAL_EXECUTION = externalExecutionFromEnv();
 function playgroundIntEnv(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
   if (!raw) return fallback;
@@ -601,9 +599,9 @@ export function externalExecutionHtml(): string {
   return cardPage({
     title: "Workbench execution",
     heading: "Assistant execution runs elsewhere",
-    msg: `Assistant execution happens on the enrolled ${EXTERNAL_EXECUTION_LABEL}. This portal remains the durable control plane for projects, tasks, governance, devices, and audit.`,
+    msg: `Assistant execution happens on the enrolled ${EXTERNAL_EXECUTION?.label ?? "external workbench"}. This portal remains the durable control plane for projects, tasks, governance, devices, and audit.`,
     icon: ALERT_ICON,
-    actions: `<a class="btn primary" href="${escapeHtml(EXTERNAL_EXECUTION_URL ?? "/")}">Open ${escapeHtml(EXTERNAL_EXECUTION_LABEL)}</a>`,
+    actions: `<a class="btn primary" href="${escapeHtml(EXTERNAL_EXECUTION?.url ?? "/")}">Open ${escapeHtml(EXTERNAL_EXECUTION?.label ?? "external workbench")}</a>`,
     help: "No model API key is used by this portal.",
   });
 }
@@ -1200,12 +1198,12 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
   }
 
-  if (key === "web-ui" && EXTERNAL_EXECUTION_URL) {
-    if (method === "GET" && wantsHtml(req)) return sendHtml(res, 503, externalExecutionHtml());
+  if (key === "web-ui" && EXTERNAL_EXECUTION) {
+    if ((method === "GET" || method === "HEAD") && wantsHtml(req)) return sendHtml(res, 200, externalExecutionHtml());
     return json(res, 409, {
       error: "external_execution",
-      message: `Assistant execution happens on the enrolled ${EXTERNAL_EXECUTION_LABEL}.`,
-      url: EXTERNAL_EXECUTION_URL,
+      message: `Assistant execution happens on the enrolled ${EXTERNAL_EXECUTION.label}.`,
+      url: EXTERNAL_EXECUTION.url,
     });
   }
 

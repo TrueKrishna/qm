@@ -130,9 +130,8 @@ test("portalRoutes validates session and signed-upstream plugin mounts", () => {
 test("portalRoutes rejects unsafe, ambiguous, and unresolved mounts", () => {
   const base = { services: ["core", "portal"], plugins: [{ name: "programme" }, { name: "edge-registry" }] };
   for (const pathPrefix of ["programme", "/", "/admin", "/api/jobs", "/edge%2fv1", "/edge%5Cv1", "/edge/"]) {
-    withConfig(
-      { ...base, portalRoutes: [{ pathPrefix, plugin: "programme", access: "session" }] },
-      ({ path }) => assert.throws(() => loadConfigAt(path), /portalRoutes/),
+    withConfig({ ...base, portalRoutes: [{ pathPrefix, plugin: "programme", access: "session" }] }, ({ path }) =>
+      assert.throws(() => loadConfigAt(path), /portalRoutes/),
     );
   }
   withConfig(
@@ -160,13 +159,11 @@ test("portalRoutes rejects unsafe, ambiguous, and unresolved mounts", () => {
 });
 
 test("PORTAL_PLUGIN_ROUTES is deployment-managed", () => {
-  withConfig(
-    { services: ["core", "portal"], env: { portal: { PORTAL_PLUGIN_ROUTES: "[]" } } },
-    ({ path }) => assert.throws(() => loadConfigAt(path), /PORTAL_PLUGIN_ROUTES.*managed/),
+  withConfig({ services: ["core", "portal"], env: { portal: { PORTAL_PLUGIN_ROUTES: "[]" } } }, ({ path }) =>
+    assert.throws(() => loadConfigAt(path), /PORTAL_PLUGIN_ROUTES.*managed/),
   );
-  withConfig(
-    { plugins: [{ name: "programme", env: { PORTAL_PLUGIN_ROUTES: "[]" } }] },
-    ({ path }) => assert.throws(() => loadConfigAt(path), /PORTAL_PLUGIN_ROUTES.*managed/),
+  withConfig({ plugins: [{ name: "programme", env: { PORTAL_PLUGIN_ROUTES: "[]" } }] }, ({ path }) =>
+    assert.throws(() => loadConfigAt(path), /PORTAL_PLUGIN_ROUTES.*managed/),
   );
 });
 
@@ -180,6 +177,28 @@ test("env (per-service) and imageOverrides validate by service name", () => {
   withConfig({ env: { core: { S3_PREFIX: "core/" } } }, ({ path }) => {
     assert.equal(loadConfigAt(path).config.env.core?.S3_PREFIX, "core/");
   });
+});
+
+test("external execution is an all-or-nothing matching portal and admin boundary", () => {
+  const services = ["core", "web-ui", "admin", "portal"];
+  const valid = {
+    portal: { EXTERNAL_EXECUTION_URL: "/programme", EXTERNAL_EXECUTION_LABEL: "BBG Workbench" },
+    admin: { EXTERNAL_EXECUTION_URL: "/programme", EXTERNAL_EXECUTION_LABEL: "BBG Workbench" },
+  };
+  withConfig({ services, env: valid }, ({ path }) => assert.deepEqual(loadConfigAt(path).config.env, valid));
+  for (const env of [
+    { portal: valid.portal },
+    { portal: valid.portal, admin: { ...valid.admin, EXTERNAL_EXECUTION_URL: "/other" } },
+    { portal: valid.portal, admin: { ...valid.admin, EXTERNAL_EXECUTION_LABEL: "Other" } },
+    {
+      portal: { ...valid.portal, EXTERNAL_EXECUTION_URL: "/\\outside.example" },
+      admin: { ...valid.admin, EXTERNAL_EXECUTION_URL: "/\\outside.example" },
+    },
+  ]) {
+    withConfig({ services, env }, ({ path }) =>
+      assert.throws(() => loadConfigAt(path), /external execution|EXTERNAL_EXECUTION_(?:URL|LABEL)/i),
+    );
+  }
 });
 
 test("listen ports are managed consistently across deployment targets", () => {

@@ -120,6 +120,41 @@ test("docker and AWS wire the broker with parity", () => {
   assert.equal(serviceEnvironment(aws, "auth").PORT, "8080");
 });
 
+test("external execution reaches portal and admin on Docker, Fly, and AWS", () => {
+  const config = configWith(
+    configText({
+      env: `{
+      "auth": { "AUTH_EMAIL_TRANSPORT": "resend", "AUTH_ALLOWED_EMAIL_DOMAIN": "example.com" },
+      "portal": { "EXTERNAL_EXECUTION_URL": "/programme", "EXTERNAL_EXECUTION_LABEL": "BBG Workbench" },
+      "admin": { "EXTERNAL_EXECUTION_URL": "/programme", "EXTERNAL_EXECUTION_LABEL": "BBG Workbench" }
+    }`,
+    }),
+  );
+  for (const service of ["portal", "admin"] as const) {
+    assert.equal(dockerServiceEnv(config, service).EXTERNAL_EXECUTION_URL, "/programme");
+    assert.match(
+      derivedTomlFor({ ...config, target: "fly", appPrefix: "qm", region: "sjc", flyOrg: "acme" }, service, repoRoot),
+      /EXTERNAL_EXECUTION_URL = "\/programme"/,
+    );
+  }
+  const aws = {
+    ...config,
+    target: "aws" as const,
+    aws: {
+      accountId: "123456789012",
+      region: "us-west-2",
+      cluster: "acme-qm",
+      deployRoleArn: "arn:aws:iam::123456789012:role/acme-qm-github-deploy",
+      secretsPrefix: "acme/qm/",
+      imageLabel: "latest",
+      networking: { cloudMapNamespace: "acme.internal" },
+      services: {},
+    },
+  } as QmConfig;
+  assert.equal(serviceEnvironment(aws, "portal").EXTERNAL_EXECUTION_LABEL, "BBG Workbench");
+  assert.equal(serviceEnvironment(aws, "admin").EXTERNAL_EXECUTION_LABEL, "BBG Workbench");
+});
+
 test("docker and Fly derive portal plugin upstreams from deployment topology", () => {
   const docker = configWith(`{
     "contract": 1, "orgId": "acme", "publicUrl": "https://agent.example.com", "target": "docker",
