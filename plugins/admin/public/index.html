@@ -3843,10 +3843,13 @@
               </p>
             </div>
             <div class="setup-grid">
-              <section class="setup-step">
+              <section class="setup-step" id="onboarding-model-step">
                 <span class="badge muted" id="onboarding-model-badge">Not ready</span>
-                <h2>1. Model provider</h2>
+                <h2 id="onboarding-model-title">1. Model provider</h2>
                 <p id="onboarding-model-summary">Add the key QM will use for its base model.</p>
+                <div class="foot hidden" id="onboarding-model-action">
+                  <a class="header-button" id="onboarding-workbench-link">Open workbench</a>
+                </div>
               </section>
               <section class="setup-step">
                 <span class="badge muted" id="onboarding-slack-badge">Optional</span>
@@ -3877,7 +3880,7 @@
                 </div>
               </section>
             </div>
-            <section class="card">
+            <section class="card" id="onboarding-base-model">
               <div class="head">
                 <h2>Base model</h2>
                 <p>
@@ -3905,7 +3908,7 @@
                 ><span class="status" id="st-onboarding-model"></span>
               </div>
             </section>
-            <section class="card">
+            <section class="card" id="onboarding-custom-providers">
               <div class="head">
                 <h2>Custom providers</h2>
                 <p>
@@ -4821,6 +4824,7 @@
 
     <script>
       const $ = (id) => document.getElementById(id);
+      const EXTERNAL_EXECUTION = __EXTERNAL_EXECUTION__;
       const EFFECTS = ["allow", "deny", "require_approval"];
       const EFFECT_LABELS = { allow: "Allow", deny: "Deny", require_approval: "Require approval" };
       const SECTIONS = [
@@ -7032,7 +7036,9 @@
       }
       async function loadOnboarding() {
         const [models, slack, catalog, config] = await Promise.all([
-          api("GET", "/api/model-providers"),
+          EXTERNAL_EXECUTION
+            ? Promise.resolve({ ok: true, data: { providers: [], models: [] } })
+            : api("GET", "/api/model-providers"),
           api("GET", "/api/slack-installation"),
           api("GET", "/api/connector-catalog"),
           api("GET", "/api/scopes/" + encodeURIComponent(orgScope())),
@@ -7042,29 +7048,41 @@
           renderOnboardingProviderOptions();
           return;
         }
-        onboardingModelStatuses = models.data.providers || [];
-        onboardingModels = {};
-        (models.data.models || []).forEach((model) => {
-          (onboardingModels[model.provider] ||= []).push(model);
-        });
-        const baseModel = config.data.baseModel || config.data.baseModelDefault || "";
-        const baseProvider = onboardingProviderForModel(baseModel);
-        const baseStatus = onboardingModelStatuses.find((item) => item.provider === baseProvider);
-        onboardingBadge(
-          "onboarding-model-badge",
-          baseStatus?.configured ? "Ready" : "Needs a key",
-          Boolean(baseStatus?.configured),
-        );
-        $("onboarding-model-summary").textContent = !baseModel
-          ? "No base model is configured yet — pick a provider and model below."
-          : baseStatus?.configured
-            ? baseModel + " · " + (baseStatus.source === "admin" ? "admin-managed key" : "deployment key")
-            : baseModel +
-              " cannot run until its " +
-              (MODEL_PROVIDER_LABELS[baseProvider] || connectorName(baseProvider)) +
-              " key is configured.";
-        renderOnboardingProviderOptions(baseProvider);
-        renderOnboardingModelOptions(baseModel);
+        if (EXTERNAL_EXECUTION) {
+          onboardingBadge("onboarding-model-badge", "Ready", true);
+          $("onboarding-model-title").textContent = "1. " + EXTERNAL_EXECUTION.label;
+          $("onboarding-model-summary").textContent =
+            "Assistant execution happens on this enrolled workbench. The portal remains the durable control plane and uses no model API key.";
+          $("onboarding-workbench-link").href = EXTERNAL_EXECUTION.url;
+          $("onboarding-workbench-link").textContent = "Open " + EXTERNAL_EXECUTION.label;
+          $("onboarding-model-action").classList.remove("hidden");
+          $("onboarding-base-model").classList.add("hidden");
+          $("onboarding-custom-providers").classList.add("hidden");
+        } else {
+          onboardingModelStatuses = models.data.providers || [];
+          onboardingModels = {};
+          (models.data.models || []).forEach((model) => {
+            (onboardingModels[model.provider] ||= []).push(model);
+          });
+          const baseModel = config.data.baseModel || config.data.baseModelDefault || "";
+          const baseProvider = onboardingProviderForModel(baseModel);
+          const baseStatus = onboardingModelStatuses.find((item) => item.provider === baseProvider);
+          onboardingBadge(
+            "onboarding-model-badge",
+            baseStatus?.configured ? "Ready" : "Needs a key",
+            Boolean(baseStatus?.configured),
+          );
+          $("onboarding-model-summary").textContent = !baseModel
+            ? "No base model is configured yet — pick a provider and model below."
+            : baseStatus?.configured
+              ? baseModel + " · " + (baseStatus.source === "admin" ? "admin-managed key" : "deployment key")
+              : baseModel +
+                " cannot run until its " +
+                (MODEL_PROVIDER_LABELS[baseProvider] || connectorName(baseProvider)) +
+                " key is configured.";
+          renderOnboardingProviderOptions(baseProvider);
+          renderOnboardingModelOptions(baseModel);
+        }
 
         onboardingBadge(
           "onboarding-slack-badge",

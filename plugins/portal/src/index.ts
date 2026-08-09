@@ -72,6 +72,10 @@ const LOCAL_AUTH_BYPASS = LOCAL_AUTH_BYPASS_REQUESTED && !IS_PROD && isLocalPort
 const LOCAL_AUTH_PRINCIPAL = process.env.PORTAL_DEV_PRINCIPAL || process.env.USER || "dev-admin";
 const DEPLOYMENTS_ENABLED = process.env.PORTAL_DEPLOYMENTS_ENABLED === "1";
 const PLAYGROUND = process.env.PORTAL_PLAYGROUND === "1";
+const EXTERNAL_EXECUTION_URL = /^\/(?!\/)/.test(process.env.EXTERNAL_EXECUTION_URL ?? "")
+  ? process.env.EXTERNAL_EXECUTION_URL!
+  : undefined;
+const EXTERNAL_EXECUTION_LABEL = (process.env.EXTERNAL_EXECUTION_LABEL ?? "External workbench").trim().slice(0, 80);
 function playgroundIntEnv(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
   if (!raw) return fallback;
@@ -133,7 +137,14 @@ function prefixesOverlap(left: string, right: string): boolean {
 
 function privateUpstreamHost(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  if (!host.includes(".") || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".internal") || host.endsWith(".local")) return true;
+  if (
+    !host.includes(".") ||
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host.endsWith(".internal") ||
+    host.endsWith(".local")
+  )
+    return true;
   if (host === "::1" || host.startsWith("fc") || host.startsWith("fd")) return true;
   const octets = host.split(".").map(Number);
   if (octets.length !== 4 || octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
@@ -209,7 +220,8 @@ export function parsePluginRoutes(raw: string | undefined): PluginRoute[] {
     }
   }
   return routes.sort(
-    (left, right) => right.pathPrefix.length - left.pathPrefix.length || left.pathPrefix.localeCompare(right.pathPrefix),
+    (left, right) =>
+      right.pathPrefix.length - left.pathPrefix.length || left.pathPrefix.localeCompare(right.pathPrefix),
   );
 }
 
@@ -582,6 +594,17 @@ export function notConfiguredHtml(): string {
     warn: true,
     actions: `<a class="btn primary" href="/">Try again</a>`,
     help: "Ask your admin to complete onboarding in the Admin area.",
+  });
+}
+
+export function externalExecutionHtml(): string {
+  return cardPage({
+    title: "Workbench execution",
+    heading: "Assistant execution runs elsewhere",
+    msg: `Assistant execution happens on the enrolled ${EXTERNAL_EXECUTION_LABEL}. This portal remains the durable control plane for projects, tasks, governance, devices, and audit.`,
+    icon: ALERT_ICON,
+    actions: `<a class="btn primary" href="${escapeHtml(EXTERNAL_EXECUTION_URL ?? "/")}">Open ${escapeHtml(EXTERNAL_EXECUTION_LABEL)}</a>`,
+    help: "No model API key is used by this portal.",
   });
 }
 
@@ -1175,6 +1198,15 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       }
       return json(res, 403, { error: "forbidden", message: "admin access required" });
     }
+  }
+
+  if (key === "web-ui" && EXTERNAL_EXECUTION_URL) {
+    if (method === "GET" && wantsHtml(req)) return sendHtml(res, 503, externalExecutionHtml());
+    return json(res, 409, {
+      error: "external_execution",
+      message: `Assistant execution happens on the enrolled ${EXTERNAL_EXECUTION_LABEL}.`,
+      url: EXTERNAL_EXECUTION_URL,
+    });
   }
 
   if (key === "web-ui" && method === "GET" && wantsHtml(req)) {
