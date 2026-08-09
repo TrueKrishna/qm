@@ -35,6 +35,7 @@ import {
   FORWARD_DEPLOYMENT_LAYER_HEADERS,
   FORWARD_OAUTH_HEADERS,
   FORWARD_BROKER_HEADERS,
+  FORWARD_SIGNED_PLUGIN_HEADERS,
 } from "./proxy.ts";
 import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
 import { coreClaimStore, withinRateLimit } from "../../chassis/src/claims.ts";
@@ -46,6 +47,7 @@ import {
   CORE_ORG_ID as ORG,
   CORE_SIGNING_SECRET,
   PORTAL_IDENTITY_SECRET,
+  externalExecutionFromEnv,
   portFromEnv,
 } from "../../chassis/src/env.ts";
 
@@ -71,6 +73,7 @@ const LOCAL_AUTH_BYPASS = LOCAL_AUTH_BYPASS_REQUESTED && !IS_PROD && isLocalPort
 const LOCAL_AUTH_PRINCIPAL = process.env.PORTAL_DEV_PRINCIPAL || process.env.USER || "dev-admin";
 const DEPLOYMENTS_ENABLED = process.env.PORTAL_DEPLOYMENTS_ENABLED === "1";
 const PLAYGROUND = process.env.PORTAL_PLAYGROUND === "1";
+const EXTERNAL_EXECUTION = externalExecutionFromEnv();
 function playgroundIntEnv(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
   if (!raw) return fallback;
@@ -117,6 +120,118 @@ const UPSTREAMS: Record<string, string> = {
   admin: (process.env.ADMIN_UPSTREAM ?? "http://localhost:8090").replace(/\/$/, ""),
 };
 const COOKIE_FOR: Record<string, string> = { "web-ui": "webuiuser", admin: "admin" };
+
+export interface PluginRoute {
+  pathPrefix: string;
+  access: "session" | "signed-upstream";
+  upstreamBase: string;
+}
+
+const BUILT_IN_PREFIXES = ["/admin", "/auth", "/idp", "/api", "/v1", "/connect", "/drop", "/d"];
+
+function prefixesOverlap(left: string, right: string): boolean {
+  return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
+}
+
+function privateUpstreamHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (
+    !host.includes(".") ||
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host.endsWith(".internal") ||
+    host.endsWith(".local")
+  )
+    return true;
+  if (host === "::1" || host.startsWith("fc") || host.startsWith("fd")) return true;
+  const octets = host.split(".").map(Number);
+  if (octets.length !== 4 || octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+  return (
+    octets[0] === 10 ||
+    octets[0] === 127 ||
+    (octets[0] === 169 && octets[1] === 254) ||
+    (octets[0] === 172 && octets[1]! >= 16 && octets[1]! <= 31) ||
+    (octets[0] === 192 && octets[1] === 168)
+  );
+}
+
+export function parsePluginRoutes(raw: string | undefined): PluginRoute[] {
+  if (!raw?.trim()) return [];
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new Error("PORTAL_PLUGIN_ROUTES must be valid JSON");
+  }
+  if (!Array.isArray(value)) throw new Error("PORTAL_PLUGIN_ROUTES must be an array");
+  const routes = value.map((entry, index): PluginRoute => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`PORTAL_PLUGIN_ROUTES[${index}] must be an object`);
+    }
+    const item = entry as Record<string, unknown>;
+    if (
+      Object.keys(item).length !== 3 ||
+      !Object.hasOwn(item, "pathPrefix") ||
+      !Object.hasOwn(item, "access") ||
+      !Object.hasOwn(item, "upstreamBase")
+    ) {
+      throw new Error(`PORTAL_PLUGIN_ROUTES[${index}] must contain exactly pathPrefix, access, and upstreamBase`);
+    }
+    const pathPrefix = item.pathPrefix;
+    if (typeof pathPrefix !== "string" || !/^\/[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*$/.test(pathPrefix)) {
+      throw new Error(`PORTAL_PLUGIN_ROUTES[${index}].pathPrefix is not normalized`);
+    }
+    if (BUILT_IN_PREFIXES.some((builtIn) => prefixesOverlap(pathPrefix, builtIn))) {
+      throw new Error(`PORTAL_PLUGIN_ROUTES[${index}].pathPrefix collides with a built-in route`);
+    }
+    const access = item.access;
+    if (access !== "session" && access !== "signed-upstream") {
+      throw new Error(`PORTAL_PLUGIN_ROUTES[${index}].access is invalid`);
+    }
+    if (typeof item.upstreamBase !== "string") {
+      throw new Error(`PORTAL_PLUGIN_ROUTES[${index}].upstreamBase is invalid`);
+    }
+    let upstream: URL;
+    try {
+      upstream = new URL(item.upstreamBase);
+    } catch {
+      throw new Error(`PORTAL_PLUGIN_ROUTES[${index}].upstreamBase is invalid`);
+    }
+    if (
+      (upstream.protocol !== "http:" && upstream.protocol !== "https:") ||
+      upstream.username ||
+      upstream.password ||
+      upstream.pathname !== "/" ||
+      upstream.search ||
+      upstream.hash ||
+      !privateUpstreamHost(upstream.hostname)
+    ) {
+      throw new Error(`PORTAL_PLUGIN_ROUTES[${index}].upstreamBase must be a private HTTP(S) origin`);
+    }
+    return { pathPrefix, access, upstreamBase: upstream.origin };
+  });
+  for (let left = 0; left < routes.length; left += 1) {
+    for (let right = left + 1; right < routes.length; right += 1) {
+      if (prefixesOverlap(routes[left]!.pathPrefix, routes[right]!.pathPrefix)) {
+        throw new Error("PORTAL_PLUGIN_ROUTES path prefixes overlap");
+      }
+    }
+  }
+  return routes.sort(
+    (left, right) =>
+      right.pathPrefix.length - left.pathPrefix.length || left.pathPrefix.localeCompare(right.pathPrefix),
+  );
+}
+
+const PLUGIN_ROUTES = parsePluginRoutes(process.env.PORTAL_PLUGIN_ROUTES);
+
+export function pluginRouteFor(pathname: string): (PluginRoute & { forwardPath: string }) | undefined {
+  const route = PLUGIN_ROUTES.find(
+    ({ pathPrefix }) => pathname === pathPrefix || pathname.startsWith(`${pathPrefix}/`),
+  );
+  if (!route) return undefined;
+  return { ...route, forwardPath: pathname.slice(route.pathPrefix.length) || "/" };
+}
 
 const OIDC: OidcConfig = {
   authEndpoint: process.env.OIDC_AUTH_ENDPOINT ?? "https://slack.com/openid/connect/authorize",
@@ -477,6 +592,17 @@ export function notConfiguredHtml(): string {
     warn: true,
     actions: `<a class="btn primary" href="/">Try again</a>`,
     help: "Ask your admin to complete onboarding in the Admin area.",
+  });
+}
+
+export function externalExecutionHtml(): string {
+  return cardPage({
+    title: "Workbench execution",
+    heading: "Assistant execution runs elsewhere",
+    msg: `Assistant execution happens on the enrolled ${EXTERNAL_EXECUTION?.label ?? "external workbench"}. This portal remains the durable control plane for projects, tasks, governance, devices, and audit.`,
+    icon: ALERT_ICON,
+    actions: `<a class="btn primary" href="${escapeHtml(EXTERNAL_EXECUTION?.url ?? "/")}">Open ${escapeHtml(EXTERNAL_EXECUTION?.label ?? "external workbench")}</a>`,
+    help: "No model API key is used by this portal.",
   });
 }
 
@@ -923,6 +1049,16 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return json(res, 400, { error: "bad_request", message: "illegal path" });
   }
 
+  const pluginRoute = pluginRouteFor(pathname);
+  if (pluginRoute?.access === "signed-upstream") {
+    return proxyToUpstream(
+      req,
+      res,
+      { baseUrl: pluginRoute.upstreamBase, path: pluginRoute.forwardPath, search: url.search },
+      FORWARD_SIGNED_PLUGIN_HEADERS,
+    );
+  }
+
   const consentBounce = (): void => {
     res.writeHead(302, { location: `/auth/login?returnTo=${encodeURIComponent(`${pathname}${url.search}`)}` });
     return void res.end();
@@ -1018,6 +1154,17 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
   }
 
+  if (pluginRoute?.access === "session") {
+    return proxyToSurface(req, res, {
+      upstreamBase: pluginRoute.upstreamBase,
+      forwardPath: pluginRoute.forwardPath,
+      search: url.search,
+      principal: session.sub,
+      ...(session.name ? { displayName: session.name } : {}),
+      ...(PORTAL_IDENTITY_SECRET ? { identitySecret: PORTAL_IDENTITY_SECRET } : {}),
+    });
+  }
+
   if (isDeployment) {
     const rest = pathname.slice(`/${seg}/`.length);
     const slash = rest.indexOf("/");
@@ -1049,6 +1196,15 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       }
       return json(res, 403, { error: "forbidden", message: "admin access required" });
     }
+  }
+
+  if (key === "web-ui" && EXTERNAL_EXECUTION) {
+    if ((method === "GET" || method === "HEAD") && wantsHtml(req)) return sendHtml(res, 200, externalExecutionHtml());
+    return json(res, 409, {
+      error: "external_execution",
+      message: `Assistant execution happens on the enrolled ${EXTERNAL_EXECUTION.label}.`,
+      url: EXTERNAL_EXECUTION.url,
+    });
   }
 
   if (key === "web-ui" && method === "GET" && wantsHtml(req)) {

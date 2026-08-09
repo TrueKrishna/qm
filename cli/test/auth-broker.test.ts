@@ -120,6 +120,67 @@ test("docker and AWS wire the broker with parity", () => {
   assert.equal(serviceEnvironment(aws, "auth").PORT, "8080");
 });
 
+test("external execution reaches portal and admin on Docker, Fly, and AWS", () => {
+  const config = configWith(
+    configText({
+      env: `{
+      "auth": { "AUTH_EMAIL_TRANSPORT": "resend", "AUTH_ALLOWED_EMAIL_DOMAIN": "example.com" },
+      "portal": { "EXTERNAL_EXECUTION_URL": "/programme", "EXTERNAL_EXECUTION_LABEL": "BBG Workbench" },
+      "admin": { "EXTERNAL_EXECUTION_URL": "/programme", "EXTERNAL_EXECUTION_LABEL": "BBG Workbench" }
+    }`,
+    }),
+  );
+  for (const service of ["portal", "admin"] as const) {
+    assert.equal(dockerServiceEnv(config, service).EXTERNAL_EXECUTION_URL, "/programme");
+    assert.match(
+      derivedTomlFor({ ...config, target: "fly", appPrefix: "qm", region: "sjc", flyOrg: "acme" }, service, repoRoot),
+      /EXTERNAL_EXECUTION_URL = "\/programme"/,
+    );
+  }
+  const aws = {
+    ...config,
+    target: "aws" as const,
+    aws: {
+      accountId: "123456789012",
+      region: "us-west-2",
+      cluster: "acme-qm",
+      deployRoleArn: "arn:aws:iam::123456789012:role/acme-qm-github-deploy",
+      secretsPrefix: "acme/qm/",
+      imageLabel: "latest",
+      networking: { cloudMapNamespace: "acme.internal" },
+      services: {},
+    },
+  } as QmConfig;
+  assert.equal(serviceEnvironment(aws, "portal").EXTERNAL_EXECUTION_LABEL, "BBG Workbench");
+  assert.equal(serviceEnvironment(aws, "admin").EXTERNAL_EXECUTION_LABEL, "BBG Workbench");
+});
+
+test("docker and Fly derive portal plugin upstreams from deployment topology", () => {
+  const docker = configWith(`{
+    "contract": 1, "orgId": "acme", "publicUrl": "https://agent.example.com", "target": "docker",
+    "services": ["core", "web-ui", "portal"],
+    "plugins": [{ "name": "programme" }, { "name": "edge-registry" }], "skills": [],
+    "portalRoutes": [
+      { "pathPrefix": "/edge/v1", "plugin": "edge-registry", "access": "signed-upstream" },
+      { "pathPrefix": "/programme", "plugin": "programme", "access": "session" }
+    ],
+    "env": {}
+  }`);
+  assert.deepEqual(JSON.parse(dockerServiceEnv(docker, "portal").PORTAL_PLUGIN_ROUTES!), [
+    { pathPrefix: "/programme", access: "session", upstreamBase: "http://programme:8080" },
+    { pathPrefix: "/edge/v1", access: "signed-upstream", upstreamBase: "http://edge-registry:8080" },
+  ]);
+
+  const fly: QmConfig = { ...docker, target: "fly", appPrefix: "ycqm", region: "sjc", flyOrg: "acme" };
+  const portal = derivedTomlFor(fly, "portal", repoRoot);
+  const encoded = portal.match(/PORTAL_PLUGIN_ROUTES = (.+)/)?.[1];
+  assert.ok(encoded);
+  assert.deepEqual(JSON.parse(JSON.parse(encoded)), [
+    { pathPrefix: "/programme", access: "session", upstreamBase: "http://ycqm-programme.internal:8080" },
+    { pathPrefix: "/edge/v1", access: "signed-upstream", upstreamBase: "http://ycqm-edge-registry.internal:8080" },
+  ]);
+});
+
 test("the broker's generated secrets reach both sides under the right names", () => {
   const config = brokerConfig();
   const secrets = computedSecrets(config);

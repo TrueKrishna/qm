@@ -112,6 +112,61 @@ test("plugins: image is OPTIONAL (source plugins); env attaches to either; bad i
   );
 });
 
+test("portalRoutes validates session and signed-upstream plugin mounts", () => {
+  const portalRoutes = [
+    { pathPrefix: "/programme", plugin: "programme", access: "session" },
+    { pathPrefix: "/edge/v1", plugin: "edge-registry", access: "signed-upstream" },
+  ];
+  withConfig(
+    {
+      services: ["core", "web-ui", "portal"],
+      plugins: [{ name: "programme" }, { name: "edge-registry" }],
+      portalRoutes,
+    },
+    ({ path }) => assert.deepEqual(loadConfigAt(path).config.portalRoutes, portalRoutes),
+  );
+});
+
+test("portalRoutes rejects unsafe, ambiguous, and unresolved mounts", () => {
+  const base = { services: ["core", "portal"], plugins: [{ name: "programme" }, { name: "edge-registry" }] };
+  for (const pathPrefix of ["programme", "/", "/admin", "/api/jobs", "/edge%2fv1", "/edge%5Cv1", "/edge/"]) {
+    withConfig({ ...base, portalRoutes: [{ pathPrefix, plugin: "programme", access: "session" }] }, ({ path }) =>
+      assert.throws(() => loadConfigAt(path), /portalRoutes/),
+    );
+  }
+  withConfig(
+    { ...base, portalRoutes: [{ pathPrefix: "/programme", plugin: "missing", access: "session" }] },
+    ({ path }) => assert.throws(() => loadConfigAt(path), /unknown plugin/),
+  );
+  withConfig(
+    {
+      ...base,
+      portalRoutes: [
+        { pathPrefix: "/edge", plugin: "edge-registry", access: "session" },
+        { pathPrefix: "/edge/v1", plugin: "edge-registry", access: "signed-upstream" },
+      ],
+    },
+    ({ path }) => assert.throws(() => loadConfigAt(path), /overlap/),
+  );
+  withConfig(
+    {
+      services: ["core"],
+      plugins: [{ name: "programme" }],
+      portalRoutes: [{ pathPrefix: "/programme", plugin: "programme", access: "session" }],
+    },
+    ({ path }) => assert.throws(() => loadConfigAt(path), /requires.*portal/),
+  );
+});
+
+test("PORTAL_PLUGIN_ROUTES is deployment-managed", () => {
+  withConfig({ services: ["core", "portal"], env: { portal: { PORTAL_PLUGIN_ROUTES: "[]" } } }, ({ path }) =>
+    assert.throws(() => loadConfigAt(path), /PORTAL_PLUGIN_ROUTES.*managed/),
+  );
+  withConfig({ plugins: [{ name: "programme", env: { PORTAL_PLUGIN_ROUTES: "[]" } }] }, ({ path }) =>
+    assert.throws(() => loadConfigAt(path), /PORTAL_PLUGIN_ROUTES.*managed/),
+  );
+});
+
 test("env (per-service) and imageOverrides validate by service name", () => {
   withConfig({ env: { core: { PUBLIC_WEB_URL: "http://x" } }, imageOverrides: { core: "ghcr.io/x:1" } }, ({ path }) => {
     const { config } = loadConfigAt(path);
@@ -122,6 +177,34 @@ test("env (per-service) and imageOverrides validate by service name", () => {
   withConfig({ env: { core: { S3_PREFIX: "core/" } } }, ({ path }) => {
     assert.equal(loadConfigAt(path).config.env.core?.S3_PREFIX, "core/");
   });
+});
+
+test("external execution is an all-or-nothing matching portal and admin boundary", () => {
+  const services = ["core", "web-ui", "admin", "portal"];
+  const valid = {
+    portal: { EXTERNAL_EXECUTION_URL: "/programme", EXTERNAL_EXECUTION_LABEL: "BBG Workbench" },
+    admin: { EXTERNAL_EXECUTION_URL: "/programme", EXTERNAL_EXECUTION_LABEL: "BBG Workbench" },
+  };
+  withConfig({ services, env: valid }, ({ path }) => assert.deepEqual(loadConfigAt(path).config.env, valid));
+  for (const env of [
+    { portal: valid.portal },
+    { portal: valid.portal, admin: { ...valid.admin, EXTERNAL_EXECUTION_URL: "/other" } },
+    { portal: valid.portal, admin: { ...valid.admin, EXTERNAL_EXECUTION_LABEL: "Other" } },
+    {
+      portal: { ...valid.portal, EXTERNAL_EXECUTION_URL: "/\\outside.example" },
+      admin: { ...valid.admin, EXTERNAL_EXECUTION_URL: "/\\outside.example" },
+    },
+  ]) {
+    withConfig({ services, env }, ({ path }) =>
+      assert.throws(() => loadConfigAt(path), /external execution|EXTERNAL_EXECUTION_(?:URL|LABEL)/i),
+    );
+  }
+  for (const service of ["portal", "admin"]) {
+    withConfig(
+      { services, secretEnv: { [service]: { EXTERNAL_EXECUTION_URL: "EXTERNAL_EXECUTION_URL_VALUE" } } },
+      ({ path }) => assert.throws(() => loadConfigAt(path), /secretEnv.*EXTERNAL_EXECUTION_URL.*non-secret/i),
+    );
+  }
 });
 
 test("listen ports are managed consistently across deployment targets", () => {
