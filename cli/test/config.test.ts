@@ -199,6 +199,12 @@ test("external execution is an all-or-nothing matching portal and admin boundary
       assert.throws(() => loadConfigAt(path), /external execution|EXTERNAL_EXECUTION_(?:URL|LABEL)/i),
     );
   }
+  for (const service of ["portal", "admin"]) {
+    withConfig(
+      { services, secretEnv: { [service]: { EXTERNAL_EXECUTION_URL: "EXTERNAL_EXECUTION_URL_VALUE" } } },
+      ({ path }) => assert.throws(() => loadConfigAt(path), /secretEnv.*EXTERNAL_EXECUTION_URL.*non-secret/i),
+    );
+  }
 });
 
 test("listen ports are managed consistently across deployment targets", () => {

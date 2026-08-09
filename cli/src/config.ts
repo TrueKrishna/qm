@@ -603,6 +603,13 @@ function validate(raw: unknown, path: string): QmConfig {
     }
     return entries;
   });
+  for (const service of ["portal", "admin"] as const) {
+    for (const name of externalExecution) {
+      if (secretEnv[service]?.[name] !== undefined) {
+        throw new CliError(`${path}: secretEnv.${service}.${name} is non-secret configuration and must be set in env`);
+      }
+    }
+  }
   const securityScreen = validateSecurityScreen(o["securityScreen"], path);
   const managedSecurityScreenEnv = [
     "SECURITY_SCREEN_BACKEND",
