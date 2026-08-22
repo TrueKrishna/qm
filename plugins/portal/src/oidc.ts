@@ -120,9 +120,16 @@ export async function verifyIdToken(
 }
 
 export interface PrincipalRule {
-  claim: "sub" | "email";
+  claim: "sub" | "email" | "jtyid";
   allowedEmailDomain?: string;
   allowedEmails?: readonly string[];
+  allowedPrincipals?: readonly string[];
+}
+
+const JTYID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{1,127}$/;
+
+export function isValidJtyid(value: unknown): value is string {
+  return typeof value === "string" && JTYID_RE.test(value);
 }
 
 export function resolvePrincipal(
@@ -130,6 +137,14 @@ export function resolvePrincipal(
   args: { sub: string; claims: Record<string, unknown>; userinfo: Record<string, unknown> },
 ): string {
   if (rule.claim === "sub") return args.sub;
+  if (rule.claim === "jtyid") {
+    const signed = args.claims.jtyid;
+    if (!isValidJtyid(signed)) throw new Error("identity provider returned no valid JTYID");
+    const fromUserinfo = args.userinfo.jtyid;
+    if (fromUserinfo !== undefined && fromUserinfo !== signed) throw new Error("identity provider JTYID mismatch");
+    if (!rule.allowedPrincipals?.includes(signed)) throw new Error("account is not on the permitted JTYID list");
+    return signed;
+  }
   const rawEmail = args.userinfo.email;
   if (typeof rawEmail !== "string" || !rawEmail.includes("@")) throw new Error("identity provider returned no email");
   const verified = args.userinfo.email_verified;

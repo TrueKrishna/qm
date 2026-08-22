@@ -113,6 +113,45 @@ test("doctor rejects missing and placeholder portal OIDC client ids and tenant g
   );
 });
 
+test("portal trust accepts only exact valid JTYID allowlists for the jtyid principal rule", () => {
+  const { sandbox: _sandbox, ...withoutSandbox } = config;
+  void _sandbox;
+  const portalConfig: QmConfig = {
+    ...withoutSandbox,
+    services: ["core", "portal"],
+    env: {
+      portal: {
+        OIDC_CLIENT_ID: "qm-keychain",
+        OIDC_ISSUER: "https://id.jjty.in/application/o/qm-keychain/",
+        OIDC_JWKS_URI: "https://id.jjty.in/application/o/qm-keychain/jwks/",
+        OIDC_PRINCIPAL_CLAIM: "jtyid",
+        OIDC_ALLOWED_PRINCIPALS: "jty_01,founder.primary-1",
+      },
+    },
+  };
+  assert.doesNotThrow(() => validatePortalTrust(portalConfig, "config", new Map()));
+  for (const allowed of ["", " ", "replace-me", "jty 01", "../founder", "a".repeat(129)]) {
+    assert.throws(
+      () =>
+        validatePortalTrust(
+          { ...portalConfig, env: { portal: { ...portalConfig.env.portal, OIDC_ALLOWED_PRINCIPALS: allowed } } },
+          "config",
+          new Map(),
+        ),
+      /OIDC_ALLOWED_PRINCIPALS/,
+    );
+  }
+  assert.throws(
+    () =>
+      validatePortalTrust(
+        { ...portalConfig, env: { portal: { ...portalConfig.env.portal, OIDC_PRINCIPAL_CLAIM: "sub" } } },
+        "config",
+        new Map(),
+      ),
+    /OIDC_PRINCIPAL_CLAIM=jtyid/,
+  );
+});
+
 test("Fly doctor requires the signing secret for source plugins absent from config", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-doctor-"));
   const bin = join(dir, "fake-fly.cjs");

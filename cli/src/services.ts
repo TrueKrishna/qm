@@ -100,6 +100,7 @@ export const AUTH_BROKER_ENV_KEYS = [
   "OIDC_SCOPES",
   "OIDC_PRINCIPAL_CLAIM",
   "OIDC_ALLOWED_EMAIL_DOMAIN",
+  "OIDC_ALLOWED_PRINCIPALS",
 ] as const;
 
 export function brokerWiring(
@@ -221,6 +222,7 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
         "OIDC_CLIENT_ID",
         "OIDC_ALLOWED_EMAILS",
         "OIDC_ALLOWED_EMAIL_DOMAIN",
+        "OIDC_ALLOWED_PRINCIPALS",
         "PORTAL_EXPECTED_TEAM_ID",
         "OIDC_AUTH_ENDPOINT",
         "OIDC_TOKEN_ENDPOINT",

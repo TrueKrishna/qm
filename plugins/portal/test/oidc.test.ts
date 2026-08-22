@@ -232,3 +232,55 @@ test("resolvePrincipal allowedEmails permits only the seeded verified addresses"
     /permitted email list/,
   );
 });
+
+test("resolvePrincipal claim=jtyid accepts only an allowlisted signed stable principal", () => {
+  const rule = { claim: "jtyid" as const, allowedPrincipals: ["jty_01", "founder.primary-1"] };
+  assert.equal(
+    resolvePrincipal(rule, {
+      sub: "authentik-subject",
+      claims: { jtyid: "jty_01" },
+      userinfo: { sub: "authentik-subject", jtyid: "jty_01" },
+    }),
+    "jty_01",
+  );
+  assert.equal(
+    resolvePrincipal(rule, {
+      sub: "authentik-subject",
+      claims: { jtyid: "founder.primary-1" },
+      userinfo: { sub: "authentik-subject" },
+    }),
+    "founder.primary-1",
+  );
+  assert.throws(
+    () =>
+      resolvePrincipal(rule, {
+        sub: "authentik-subject",
+        claims: { jtyid: "jty_02" },
+        userinfo: { sub: "authentik-subject", jtyid: "jty_02" },
+      }),
+    /permitted JTYID list/,
+  );
+});
+
+test("resolvePrincipal claim=jtyid rejects missing malformed and mismatched claims", () => {
+  const rule = { claim: "jtyid" as const, allowedPrincipals: ["jty_01"] };
+  assert.throws(
+    () => resolvePrincipal(rule, { sub: "authentik-subject", claims: {}, userinfo: {} }),
+    /no valid JTYID/,
+  );
+  for (const malformed of [" jty_01", "jty 01", "j", "../founder", "a".repeat(129)]) {
+    assert.throws(
+      () => resolvePrincipal(rule, { sub: "authentik-subject", claims: { jtyid: malformed }, userinfo: {} }),
+      /no valid JTYID/,
+    );
+  }
+  assert.throws(
+    () =>
+      resolvePrincipal(rule, {
+        sub: "authentik-subject",
+        claims: { jtyid: "jty_01" },
+        userinfo: { jtyid: "jty_02" },
+      }),
+    /JTYID mismatch/,
+  );
+});

@@ -54,7 +54,10 @@ test("production boot requires an explicit OIDC tenant trust boundary", () => {
       encoding: "utf8",
     });
     assert.notEqual(missing.status, 0);
-    assert.match(missing.stderr, /OIDC_ALLOWED_EMAILS, OIDC_ALLOWED_EMAIL_DOMAIN, or PORTAL_EXPECTED_TEAM_ID/);
+    assert.match(
+      missing.stderr,
+      /OIDC_ALLOWED_EMAILS, OIDC_ALLOWED_EMAIL_DOMAIN, OIDC_ALLOWED_PRINCIPALS, or PORTAL_EXPECTED_TEAM_ID/,
+    );
   }
   for (const gate of [
     { OIDC_ALLOWED_EMAILS: "admin@example.com" },
@@ -68,6 +71,48 @@ test("production boot requires an explicit OIDC tenant trust boundary", () => {
       encoding: "utf8",
     });
     assert.equal(accepted.status, 0, accepted.stderr);
+  }
+});
+
+test("production boot accepts an exact JTYID principal allowlist and rejects ambiguous combinations", () => {
+  const command = "import('./src/index.ts').then(m => m.bootChecks())";
+  const baseEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    NODE_ENV: "production",
+    PORTAL_PUBLIC_URL: "https://qm.jjty.in",
+    PORTAL_SESSION_SECRET: "portal-session-secret",
+    CORE_SIGNING_SECRET: "core-signing-secret",
+    OIDC_CLIENT_ID: "qm-keychain",
+    OIDC_CLIENT_SECRET: "client-secret",
+    OIDC_ISSUER: "https://id.jjty.in/application/o/qm-keychain/",
+    OIDC_AUTH_ENDPOINT: "https://id.jjty.in/application/o/authorize/",
+    OIDC_TOKEN_ENDPOINT: "https://id.jjty.in/application/o/token/",
+    OIDC_USERINFO_ENDPOINT: "https://id.jjty.in/application/o/userinfo/",
+    OIDC_JWKS_URI: "https://id.jjty.in/application/o/qm-keychain/jwks/",
+    OIDC_SCOPES: "openid profile email jtyid",
+    OIDC_PRINCIPAL_CLAIM: "jtyid",
+    OIDC_ALLOWED_PRINCIPALS: "jty_01,founder.primary-1",
+  };
+  delete baseEnv.PORTAL_EXPECTED_TEAM_ID;
+  delete baseEnv.OIDC_ALLOWED_EMAIL_DOMAIN;
+  delete baseEnv.OIDC_ALLOWED_EMAILS;
+  const boot = (env: NodeJS.ProcessEnv) =>
+    spawnSync(process.execPath, ["--input-type=module", "-e", command], {
+      cwd: process.cwd(), env, encoding: "utf8",
+    });
+
+  const accepted = boot(baseEnv);
+  assert.equal(accepted.status, 0, accepted.stderr);
+
+  for (const [override, pattern] of [
+    [{ OIDC_ALLOWED_PRINCIPALS: "" }, /OIDC_ALLOWED_PRINCIPALS/],
+    [{ OIDC_ALLOWED_PRINCIPALS: "jty 01" }, /OIDC_ALLOWED_PRINCIPALS/],
+    [{ OIDC_ALLOWED_EMAILS: "founder@example.com" }, /require OIDC_PRINCIPAL_CLAIM=email/],
+    [{ OIDC_PRINCIPAL_CLAIM: "sub" }, /OIDC_ALLOWED_PRINCIPALS require OIDC_PRINCIPAL_CLAIM=jtyid/],
+  ] as Array<[NodeJS.ProcessEnv, RegExp]>) {
+    const refused = boot({ ...baseEnv, ...override });
+    assert.notEqual(refused.status, 0, JSON.stringify(override));
+    assert.match(refused.stderr, pattern);
   }
 });
 

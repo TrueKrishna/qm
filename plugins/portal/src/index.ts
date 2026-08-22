@@ -22,6 +22,7 @@ import {
   buildAuthorizeUrl,
   exchangeCode,
   fetchUserinfo,
+  isValidJtyid,
   resolvePrincipal,
   verifyIdToken,
   type OidcConfig,
@@ -285,6 +286,9 @@ const PRINCIPAL_RULE: PrincipalRule = {
   allowedEmailDomain: process.env.OIDC_ALLOWED_EMAIL_DOMAIN || undefined,
   allowedEmails: process.env.OIDC_ALLOWED_EMAILS?.split(",")
     .map((email) => email.trim())
+    .filter(Boolean),
+  allowedPrincipals: process.env.OIDC_ALLOWED_PRINCIPALS?.split(",")
+    .map((principal) => principal.trim())
     .filter(Boolean),
 };
 
@@ -1367,8 +1371,8 @@ export function bootChecks(): void {
   if (APPS_DOMAIN && COOKIE_DOMAIN && !hostIsWithinDomain(APPS_DOMAIN, COOKIE_DOMAIN)) {
     problems.push(`PORTAL_COOKIE_DOMAIN (${COOKIE_DOMAIN}) must cover PORTAL_APPS_DOMAIN (${APPS_DOMAIN})`);
   }
-  if (PRINCIPAL_RULE.claim !== "sub" && PRINCIPAL_RULE.claim !== "email") {
-    problems.push(`OIDC_PRINCIPAL_CLAIM must be "sub" or "email" (got "${PRINCIPAL_RULE.claim}")`);
+  if (PRINCIPAL_RULE.claim !== "sub" && PRINCIPAL_RULE.claim !== "email" && PRINCIPAL_RULE.claim !== "jtyid") {
+    problems.push(`OIDC_PRINCIPAL_CLAIM must be "sub", "email", or "jtyid" (got "${PRINCIPAL_RULE.claim}")`);
   }
   if (
     !Number.isFinite(SESSION_TTL_S) ||
@@ -1380,6 +1384,9 @@ export function bootChecks(): void {
   }
   if ((PRINCIPAL_RULE.allowedEmailDomain || PRINCIPAL_RULE.allowedEmails?.length) && PRINCIPAL_RULE.claim !== "email") {
     problems.push("OIDC_ALLOWED_EMAIL_DOMAIN and OIDC_ALLOWED_EMAILS require OIDC_PRINCIPAL_CLAIM=email");
+  }
+  if (PRINCIPAL_RULE.allowedPrincipals?.length && PRINCIPAL_RULE.claim !== "jtyid") {
+    problems.push("OIDC_ALLOWED_PRINCIPALS require OIDC_PRINCIPAL_CLAIM=jtyid");
   }
   if (IS_PROD) {
     if (isMissingOrPlaceholder(SESSION_SECRET))
@@ -1405,12 +1412,19 @@ export function bootChecks(): void {
       problems.push("OIDC_ALLOWED_EMAILS must be a comma-separated list of valid, non-placeholder email addresses");
     }
     if (
+      process.env.OIDC_ALLOWED_PRINCIPALS !== undefined &&
+      (!PRINCIPAL_RULE.allowedPrincipals?.length || PRINCIPAL_RULE.allowedPrincipals.some((principal) => !isValidJtyid(principal)))
+    ) {
+      problems.push("OIDC_ALLOWED_PRINCIPALS must be a comma-separated list of valid, non-placeholder JTYIDs");
+    }
+    if (
       !PRINCIPAL_RULE.allowedEmailDomain &&
       !PRINCIPAL_RULE.allowedEmails?.length &&
+      !PRINCIPAL_RULE.allowedPrincipals?.length &&
       isMissingOrPlaceholder(OIDC.expectedTeamId)
     ) {
       problems.push(
-        "production requires OIDC_ALLOWED_EMAILS, OIDC_ALLOWED_EMAIL_DOMAIN, or PORTAL_EXPECTED_TEAM_ID as an identity-provider trust boundary",
+        "production requires OIDC_ALLOWED_EMAILS, OIDC_ALLOWED_EMAIL_DOMAIN, OIDC_ALLOWED_PRINCIPALS, or PORTAL_EXPECTED_TEAM_ID as an identity-provider trust boundary",
       );
     }
     if (OIDC.expectedTeamId !== undefined && isMissingOrPlaceholder(OIDC.expectedTeamId)) {

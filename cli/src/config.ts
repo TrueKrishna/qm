@@ -863,6 +863,8 @@ const validEmailDomain = (value: string): boolean => {
     );
 };
 
+const validJtyid = (value: string): boolean => /^[A-Za-z0-9][A-Za-z0-9._:-]{1,127}$/.test(value);
+
 const DERIVED_AUTH_ENV_KEYS = ["AUTH_ISSUER", "AUTH_CLIENT_ID", "AUTH_REDIRECT_URI"] as const;
 
 function validateBrokerTrust(config: QmConfig, path: string, secrets?: ReadonlyMap<string, string>): void {
@@ -942,6 +944,10 @@ export function validatePortalTrust(config: QmConfig, path = "config", secrets?:
     env.OIDC_ALLOWED_EMAILS?.split(",")
       .map((email) => email.trim())
       .filter(Boolean) ?? [];
+  const allowedPrincipals =
+    env.OIDC_ALLOWED_PRINCIPALS?.split(",")
+      .map((principal) => principal.trim())
+      .filter(Boolean) ?? [];
   const configuredTeam = env.PORTAL_EXPECTED_TEAM_ID?.trim();
   if (domain !== undefined && (isMissingOrPlaceholder(domain) || !validEmailDomain(domain))) {
     throw new CliError(
@@ -956,6 +962,19 @@ export function validatePortalTrust(config: QmConfig, path = "config", secrets?:
       `${path}: portal requires env.portal.OIDC_PRINCIPAL_CLAIM=email when using an email trust boundary`,
     );
   }
+  if (
+    env.OIDC_ALLOWED_PRINCIPALS !== undefined &&
+    (!allowedPrincipals.length || allowedPrincipals.some((principal) => isMissingOrPlaceholder(principal) || !validJtyid(principal)))
+  ) {
+    throw new CliError(
+      `${path}: env.portal.OIDC_ALLOWED_PRINCIPALS must contain valid, non-placeholder JTYIDs`,
+    );
+  }
+  if (allowedPrincipals.length && env.OIDC_PRINCIPAL_CLAIM !== "jtyid") {
+    throw new CliError(
+      `${path}: portal requires env.portal.OIDC_PRINCIPAL_CLAIM=jtyid when using OIDC_ALLOWED_PRINCIPALS`,
+    );
+  }
   if (env.PORTAL_EXPECTED_TEAM_ID !== undefined && isMissingOrPlaceholder(configuredTeam)) {
     throw new CliError(
       `${path}: env.portal.PORTAL_EXPECTED_TEAM_ID is optional, but may not be a placeholder when configured`,
@@ -965,10 +984,11 @@ export function validatePortalTrust(config: QmConfig, path = "config", secrets?:
     secrets &&
     !domain &&
     !allowedEmails.length &&
+    !allowedPrincipals.length &&
     isMissingOrPlaceholder(configuredTeam ?? secrets.get("PORTAL_EXPECTED_TEAM_ID"))
   ) {
     throw new CliError(
-      `${path}: portal requires OIDC_ALLOWED_EMAILS, OIDC_ALLOWED_EMAIL_DOMAIN, or a non-placeholder PORTAL_EXPECTED_TEAM_ID in env.portal or the target secret store`,
+      `${path}: portal requires OIDC_ALLOWED_EMAILS, OIDC_ALLOWED_EMAIL_DOMAIN, OIDC_ALLOWED_PRINCIPALS, or a non-placeholder PORTAL_EXPECTED_TEAM_ID in env.portal or the target secret store`,
     );
   }
 }
