@@ -576,6 +576,14 @@ test("AWS validates release labels, unique coordinates, Fargate sizes, and owned
     assert.equal(parsed.alb, "legacy-alb");
     assert.equal(parsed.rdsInstance, "legacy-db");
   });
+  withConfig({ target: "aws", aws: { ...aws, publicIngress: "external" } }, ({ path }) => {
+    assert.equal(loadConfigAt(path).config.aws!.publicIngress, "external");
+  });
+  for (const publicIngress of ["tunnel", "cloudfront", "", 1, null]) {
+    withConfig({ target: "aws", aws: { ...aws, publicIngress } }, ({ path }) => {
+      assert.throws(() => loadConfigAt(path), /aws\.publicIngress.*"alb" or "external"/);
+    });
+  }
   for (const alb of ["", "internal-thing", "has_underscore", "x".repeat(33)]) {
     withConfig({ target: "aws", aws: { ...aws, alb } }, ({ path }) => {
       assert.throws(() => loadConfigAt(path), /aws\.alb/);

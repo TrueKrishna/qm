@@ -2618,30 +2618,51 @@ function assertAwsPublicRouting(
 
 function assertAwsPublicFrontDoor(config: QmConfig): void {
   try {
+    if (config.aws?.publicIngress === "external") {
+      assertAwsExternalIngress(config);
+      return;
+    }
     assertAwsPublicRouting(config);
   } catch (error) {
     throw new CliError(`AWS public front door is not ready for deployment: ${errMessage(error)}`);
   }
 }
 
+function assertAwsExternalIngress(
+  config: QmConfig,
+  ecsServices: ReadonlyMap<string, AwsEcsRoutingService> = awsEcsRoutingServices(config),
+): void {
+  const attached = [...ecsServices.entries()]
+    .filter(([, service]) => (service.loadBalancers ?? []).length > 0)
+    .map(([name]) => name)
+    .sort();
+  if (attached.length) {
+    throw new Error(
+      `external public ingress requires every ECS workload to be detached from load balancers (attached: ${attached.join(", ")})`,
+    );
+  }
+}
+
 async function assertAwsPublicNetwork(config: QmConfig, rejectServerErrors = false): Promise<void> {
   const originHostname = awsPublicOrigin(config).hostname.toLowerCase().replace(/\.$/, "");
-  const albHostname = awsPublicFrontDoor(config).dnsName.toLowerCase().replace(/\.$/, "");
-  if (originHostname !== albHostname) {
-    const [cnames, publicAddresses, albAddresses] = await Promise.all([
-      resolveCname(originHostname).catch(() => []),
-      lookup(originHostname, { all: true })
-        .then((values) => values.map((value) => value.address))
-        .catch(() => []),
-      lookup(albHostname, { all: true })
-        .then((values) => values.map((value) => value.address))
-        .catch(() => []),
-    ]);
-    const cnameMatch = cnames.some((name) => name.toLowerCase().replace(/\.$/, "") === albHostname);
-    const albSet = new Set(albAddresses);
-    const addressMatch = publicAddresses.some((address) => albSet.has(address));
-    if (!cnameMatch && !addressMatch) {
-      throw new CliError(`AWS public origin ${originHostname} does not resolve to this stack's ALB ${albHostname}`);
+  if (config.aws?.publicIngress !== "external") {
+    const albHostname = awsPublicFrontDoor(config).dnsName.toLowerCase().replace(/\.$/, "");
+    if (originHostname !== albHostname) {
+      const [cnames, publicAddresses, albAddresses] = await Promise.all([
+        resolveCname(originHostname).catch(() => []),
+        lookup(originHostname, { all: true })
+          .then((values) => values.map((value) => value.address))
+          .catch(() => []),
+        lookup(albHostname, { all: true })
+          .then((values) => values.map((value) => value.address))
+          .catch(() => []),
+      ]);
+      const cnameMatch = cnames.some((name) => name.toLowerCase().replace(/\.$/, "") === albHostname);
+      const albSet = new Set(albAddresses);
+      const addressMatch = publicAddresses.some((address) => albSet.has(address));
+      if (!cnameMatch && !addressMatch) {
+        throw new CliError(`AWS public origin ${originHostname} does not resolve to this stack's ALB ${albHostname}`);
+      }
     }
   }
   const controller = new AbortController();
@@ -2940,7 +2961,11 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
         throw new Error(`ECS service ${name} is not registered to its Cloud Map service`);
     }
   });
-  check("ALB routing", () => assertAwsPublicRouting(config, ecsServices));
+  if (config.aws?.publicIngress === "external") {
+    check("external public ingress isolation", () => assertAwsExternalIngress(config, ecsServices));
+  } else {
+    check("ALB routing", () => assertAwsPublicRouting(config, ecsServices));
+  }
   await checkAsync("public URL DNS and TLS", () => assertAwsPublicNetwork(config));
   const probe = probeAwsSecretStore(
     computedSecrets(config),
@@ -3124,8 +3149,12 @@ async function checkLive(
     }
   }
   try {
-    const targets = assertAwsPublicRouting(config);
-    assertAwsHealthyIngress(config, targets);
+    if (config.aws?.publicIngress === "external") {
+      assertAwsExternalIngress(config);
+    } else {
+      const targets = assertAwsPublicRouting(config);
+      assertAwsHealthyIngress(config, targets);
+    }
   } catch (error) {
     failures.push(`public front-door drift: ${errMessage(error)}`);
   }

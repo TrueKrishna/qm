@@ -266,7 +266,14 @@ else if (a.includes("ecs describe-services")) {
       : ${JSON.stringify(opts.primaryFailedTasks ?? false)} || transientlyFailing
         ? [{ id: service.deploymentId, status: "PRIMARY", taskDefinition: service.taskDefinition, rolloutState: "IN_PROGRESS", runningCount: 0, failedTasks: 1 }]
         : [{ id: service.deploymentId, status: "PRIMARY", taskDefinition: service.taskDefinition, rolloutState: "COMPLETED", runningCount: service.desiredCount, failedTasks: transientFailedTaskPolls && s.updated ? 1 : 0 }];
-    return [{ serviceName: name, status: "ACTIVE", desiredCount: service.desiredCount, runningCount: ${JSON.stringify(opts.drainRollout ?? false)} ? service.desiredCount + 1 : service.desiredCount, taskDefinition: service.taskDefinition, deployments, loadBalancers: service.workload === ${JSON.stringify(frontService)} ? [{ targetGroupArn: ${JSON.stringify(frontTargetArn)} }] : (service.workload === "core" && ${JSON.stringify(coreHosts.length > 0)} ? [{ targetGroupArn: ${JSON.stringify(coreTargetArn)} }] : []), tags: [{ key: "Deployment", value: ${JSON.stringify(opts.foreignServiceTags ? "other" : configured.orgId)} }, { key: "ManagedBy", value: "terraform" }] }];
+    const loadBalancers = process.env.AWS_FAKE_EXTERNAL_ATTACHED && service.workload === "core"
+      ? [{ targetGroupArn: "arn:legacy" }]
+      : ${JSON.stringify(configured.aws?.publicIngress === "external")}
+        ? []
+        : service.workload === ${JSON.stringify(frontService)}
+          ? [{ targetGroupArn: ${JSON.stringify(frontTargetArn)} }]
+          : (service.workload === "core" && ${JSON.stringify(coreHosts.length > 0)} ? [{ targetGroupArn: ${JSON.stringify(coreTargetArn)} }] : []);
+    return [{ serviceName: name, status: "ACTIVE", desiredCount: service.desiredCount, runningCount: ${JSON.stringify(opts.drainRollout ?? false)} ? service.desiredCount + 1 : service.desiredCount, taskDefinition: service.taskDefinition, deployments, loadBalancers, tags: [{ key: "Deployment", value: ${JSON.stringify(opts.foreignServiceTags ? "other" : configured.orgId)} }, { key: "ManagedBy", value: "terraform" }] }];
   }), failures: names.filter((name) => !s.services[name]).map((name) => ({ arn: name, reason: "MISSING" })) }));
 }
 else if (a.includes("ecs describe-task-definition")) {
@@ -829,6 +836,27 @@ test("AWS deploy requires the live ALB listener to match the HTTPS public URL", 
   } finally {
     if (prior === undefined) delete process.env.AWS_FAKE_LISTENER_PROTOCOL;
     else process.env.AWS_FAKE_LISTENER_PROTOCOL = prior;
+    fake.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("AWS external ingress has no ALB dependency and rejects ECS load-balancer attachments", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-external-ingress-"));
+  const external: QmConfig = { ...oneServiceConfig(), aws: { ...oneServiceConfig().aws!, publicIngress: "external" } };
+  const fake = statefulAws(dir, external);
+  try {
+    await awsUp(external, dir, { dryRun: true });
+    const calls = readFileSync(fake.log, "utf8");
+    assert.doesNotMatch(calls, /elbv2 /);
+
+    process.env.AWS_FAKE_EXTERNAL_ATTACHED = "1";
+    await assert.rejects(
+      () => awsUp(external, dir, { dryRun: true }),
+      /external public ingress requires every ECS workload to be detached from load balancers.*core/,
+    );
+  } finally {
+    delete process.env.AWS_FAKE_EXTERNAL_ATTACHED;
     fake.restore();
     rmSync(dir, { recursive: true, force: true });
   }

@@ -83,6 +83,7 @@ export interface AwsConfig {
   deployRoleArn: string;
   secretsPrefix: string;
   imageLabel: string;
+  publicIngress?: "alb" | "external";
   alb?: string;
   rdsInstance?: string;
   predeployDbSnapshot?: boolean;
@@ -964,11 +965,10 @@ export function validatePortalTrust(config: QmConfig, path = "config", secrets?:
   }
   if (
     env.OIDC_ALLOWED_PRINCIPALS !== undefined &&
-    (!allowedPrincipals.length || allowedPrincipals.some((principal) => isMissingOrPlaceholder(principal) || !validJtyid(principal)))
+    (!allowedPrincipals.length ||
+      allowedPrincipals.some((principal) => isMissingOrPlaceholder(principal) || !validJtyid(principal)))
   ) {
-    throw new CliError(
-      `${path}: env.portal.OIDC_ALLOWED_PRINCIPALS must contain valid, non-placeholder JTYIDs`,
-    );
+    throw new CliError(`${path}: env.portal.OIDC_ALLOWED_PRINCIPALS must contain valid, non-placeholder JTYIDs`);
   }
   if (allowedPrincipals.length && env.OIDC_PRINCIPAL_CLAIM !== "jtyid") {
     throw new CliError(
@@ -1128,6 +1128,13 @@ function validateAws(
     throw new CliError(
       `${path}: "aws.imageLabel" must be a valid OCI/ECR tag (1-128 letters, digits, underscores, periods, or hyphens; the first character cannot be a period or hyphen)`,
     );
+  }
+  let publicIngress: AwsConfig["publicIngress"];
+  if (raw["publicIngress"] !== undefined) {
+    if (raw["publicIngress"] !== "alb" && raw["publicIngress"] !== "external") {
+      throw new CliError(`${path}: "aws.publicIngress" must be "alb" or "external"`);
+    }
+    publicIngress = raw["publicIngress"];
   }
   let alb: string | undefined;
   if (raw["alb"] !== undefined) {
@@ -1367,6 +1374,7 @@ function validateAws(
     services,
   };
   if (alb) out.alb = alb;
+  if (publicIngress) out.publicIngress = publicIngress;
   if (rdsInstance) out.rdsInstance = rdsInstance;
   if (predeployDbSnapshot !== undefined) out.predeployDbSnapshot = predeployDbSnapshot;
   if (dbRetentionMinDays !== undefined) out.dbRetentionMinDays = dbRetentionMinDays;
