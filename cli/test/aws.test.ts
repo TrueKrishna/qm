@@ -1642,6 +1642,32 @@ test("AWS task definitions are digest-pinned and route only computed secrets", (
   assert.throws(() => renderTaskDefinition(config, "core", "repo:latest"), /must be pinned by digest/);
 });
 
+test("AWS JTYID portal task excludes the legacy Slack workspace secret", () => {
+  const image = `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-portal@sha256:${"a".repeat(64)}`;
+  const available = {
+    PORTAL_EXPECTED_TEAM_ID: "arn:aws:secretsmanager:us-west-2:123456789012:secret:legacy-workspace",
+  };
+  const secretNames = (portal: Record<string, string>): string[] => {
+    const configured: QmConfig = { ...config, env: { ...config.env, portal } };
+    const container = renderTaskDefinition(configured, "portal", image, available).containerDefinitions[0]!;
+    return (container.secrets as Array<{ name: string }>).map((secret) => secret.name);
+  };
+
+  assert.ok(
+    !secretNames({
+      OIDC_CLIENT_ID: "qm-keychain",
+      OIDC_PRINCIPAL_CLAIM: "jtyid",
+      OIDC_ALLOWED_PRINCIPALS: "person_01,person_02",
+    }).includes("PORTAL_EXPECTED_TEAM_ID"),
+  );
+  assert.ok(secretNames({ OIDC_CLIENT_ID: "slack-client" }).includes("PORTAL_EXPECTED_TEAM_ID"));
+  assert.ok(
+    !secretNames({ OIDC_CLIENT_ID: "email-client", OIDC_ALLOWED_EMAIL_DOMAIN: "example.com" }).includes(
+      "PORTAL_EXPECTED_TEAM_ID",
+    ),
+  );
+});
+
 test("AWS task architecture allows per-workload overrides", () => {
   const amd64Core: QmConfig = {
     ...config,
