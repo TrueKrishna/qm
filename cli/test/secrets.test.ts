@@ -100,6 +100,21 @@ test("portal deployment coordinates can come from the target secret store", () =
   assert.ok(!computedSecrets(configured).some((secret) => secret.name === "PORTAL_EXPECTED_TEAM_ID"));
 });
 
+test("an exact JTYID allowlist supersedes the legacy Slack workspace secret", () => {
+  const configured = makeConfig({
+    services: ["core", "portal"],
+    env: {
+      portal: {
+        OIDC_CLIENT_ID: "qm-keychain",
+        OIDC_PRINCIPAL_CLAIM: "jtyid",
+        OIDC_ALLOWED_PRINCIPALS: "person_01,person_02",
+      },
+    },
+  });
+
+  assert.ok(!computedSecrets(configured).some((secret) => secret.name === "PORTAL_EXPECTED_TEAM_ID"));
+});
+
 test("portal deployments require a real initial administrator seed", () => {
   const hosted = makeConfig({
     services: ["core", "portal"],
