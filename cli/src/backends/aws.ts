@@ -515,6 +515,11 @@ function publishWorkloadImage(
       "-t",
       tagged,
     ];
+    const info = sourceBuildInfo(plugin.sourceDir!);
+    if (info.gitCommit) {
+      const revision = `${info.gitCommit}${info.dirty ? "-dirty" : ""}`;
+      args.push("--build-arg", `GIT_SHA=${revision}`, "--label", `org.opencontainers.image.revision=${revision}`);
+    }
     for (const [name, value] of Object.entries(workloadBuildArgs(config, workload)))
       args.push("--build-arg", `${name}=${value}`);
     args.push(plugin.sourceDir!);

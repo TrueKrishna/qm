@@ -1931,9 +1931,23 @@ test("AWS source builds honor a per-service dockerfile override and stamp GIT_SH
 test("AWS source-plugin provenance records the build source and detects source-mode drift", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-plugin-provenance-"));
   const pluginDir = join(dir, "plugins", "linear");
+  const dockerLog = join(dir, "docker.log");
   mkdirSync(pluginDir, { recursive: true });
   writeFileSync(join(pluginDir, "Dockerfile"), "FROM scratch\nCOPY handler.js /handler.js\n");
   writeFileSync(join(pluginDir, "handler.js"), "export const version = 1;\n");
+  const git = (...args: string[]): string => {
+    const result = spawnSync(
+      "git",
+      ["-C", pluginDir, "-c", "user.email=test@acme.example", "-c", "user.name=test", ...args],
+      { encoding: "utf8" },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  git("init");
+  git("add", "-A");
+  git("commit", "-m", "initial");
+  const head = git("rev-parse", "HEAD");
   const single = oneServiceConfig();
   const sourceConfig: QmConfig = {
     ...single,
@@ -1947,17 +1961,28 @@ test("AWS source-plugin provenance records the build source and detects source-m
     },
   };
   const dockerBin = join(dir, "docker");
-  writeFileSync(dockerBin, `#!/bin/sh\necho 'Digest: sha256:${"a".repeat(64)}'\n`);
+  writeFileSync(
+    dockerBin,
+    `#!/usr/bin/env node\nrequire("node:fs").appendFileSync(${JSON.stringify(dockerLog)}, process.argv.slice(2).join(" ") + "\\n");\nconsole.log('Digest: sha256:${"a".repeat(64)}');\n`,
+  );
   chmodSync(dockerBin, 0o755);
   const priorPath = process.env.PATH;
   process.env.PATH = `${dir}:${priorPath}`;
   const fake = statefulAws(dir, sourceConfig);
   try {
     await awsUp(sourceConfig, dir, { yes: true });
+    const pluginBuild = readFileSync(dockerLog, "utf8")
+      .split("\n")
+      .find((line) => line.includes("buildx build") && line.includes("qm-linear"));
+    assert.ok(pluginBuild?.includes(`--build-arg GIT_SHA=${head}`), `plugin build stamps GIT_SHA: ${pluginBuild}`);
+    assert.ok(
+      pluginBuild?.includes(`--label org.opencontainers.image.revision=${head}`),
+      `plugin build labels the immutable image revision: ${pluginBuild}`,
+    );
     const state = JSON.parse(readFileSync(fake.state, "utf8"));
     const manifestId = state.dynamo["deployment/current"].manifestId.S;
     const manifest = JSON.parse(state.dynamo[`deployment/manifest/${manifestId}`].manifest.S);
-    assert.deepEqual(manifest.imageProvenance.linear, { kind: "source-build", source: "plugin" });
+    assert.deepEqual(manifest.imageProvenance.linear, { kind: "source-build", source: "plugin", gitCommit: head, dirty: false });
     await assert.doesNotReject(() => awsCheckLive(sourceConfig, { report: false, configDir: dir }));
 
     const persisted = JSON.parse(readFileSync(fake.state, "utf8"));
