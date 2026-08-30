@@ -21,6 +21,8 @@ import {
   type ModelProviderAvailability,
 } from "./model/pi-models.ts";
 
+export type AgentToolProfile = "full" | "coordination";
+
 export interface Config {
   production: boolean;
   allowUnauthenticatedCore: boolean;
@@ -30,6 +32,8 @@ export interface Config {
   sessionStore: "memory" | "postgres";
   databaseUrl?: string;
   harness: "mock" | "pi" | "opencode" | "codex" | "claude";
+  toolProfile: AgentToolProfile;
+  modelAllowlist?: string[];
   securityPosture: SecurityPosture;
   sandboxBackend: "aws" | "local" | "sprites";
   sandboxSecondaryBackend?: "aws" | "local" | "sprites";
@@ -440,6 +444,22 @@ function boolEnvStrict(name: string, value: string | undefined): boolean | undef
   return parsed;
 }
 
+function parseAgentToolProfile(value: string | undefined): AgentToolProfile {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized || normalized === "full") return "full";
+  if (normalized === "coordination") return "coordination";
+  throw new Error(`AGENT_TOOL_PROFILE=${JSON.stringify(value)} is not recognized — use full or coordination.`);
+}
+
+function parseAgentModelAllowlist(value: string | undefined): string[] | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  const entries = value.split(",").map((entry) => entry.trim());
+  if (entries.some((entry) => !entry || entry.length > 256 || /\s/.test(entry))) {
+    throw new Error("AGENT_MODEL_ALLOWLIST must be a comma-separated list of non-empty model ids without whitespace");
+  }
+  return [...new Set(entries)];
+}
+
 function numEnvStrict(name: string, value: string | undefined): number | undefined {
   if (value === undefined || value.trim() === "") return undefined;
   const parsed = numEnv(value);
@@ -684,6 +704,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     numEnvStrict("RUN_MAX_AGE_MS", env.RUN_MAX_AGE_MS) ??
     (turnWallClockMs > 0 ? 2 * turnWallClockMs : CONFIG_DEFAULTS.runMaxAgeMs);
   const slack = slackPluginConfigFromEnv(env);
+  const harness = harnessEnvStrict(env.HARNESS);
+  const modelAllowlist = parseAgentModelAllowlist(env.AGENT_MODEL_ALLOWLIST);
+  let configuredModel = env.PI_MODEL;
+  if (harness === "codex") configuredModel = env.CODEX_MODEL;
+  else if (harness === "claude") configuredModel = env.CLAUDE_MODEL;
+  else if (harness === "opencode") configuredModel = env.OPENCODE_MODEL || env.PI_MODEL;
+  if (modelAllowlist?.length && (!configuredModel || !modelAllowlist.includes(configuredModel))) {
+    throw new Error("AGENT_MODEL_ALLOWLIST must include the configured model for the active harness");
+  }
+  for (const name of ["PI_DETECT_MODEL", "PI_TITLE_MODEL", "PI_JUDGE_MODEL"] as const) {
+    const model = env[name]?.trim();
+    if (model && modelAllowlist?.length && !modelAllowlist.includes(model)) {
+      throw new Error(`${name} is not enabled by AGENT_MODEL_ALLOWLIST`);
+    }
+  }
   return {
     production: env.NODE_ENV === "production",
     allowUnauthenticatedCore: boolEnvStrict("ALLOW_UNAUTHENTICATED_CORE", env.ALLOW_UNAUTHENTICATED_CORE) ?? false,
@@ -692,7 +727,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     orgId: env.ORG_ID ?? DEFAULT_ORG_ID,
     sessionStore: env.SESSION_STORE === "postgres" ? "postgres" : "memory",
     ...(env.DATABASE_URL ? { databaseUrl: env.DATABASE_URL } : {}),
-    harness: harnessEnvStrict(env.HARNESS),
+    harness,
+    toolProfile: parseAgentToolProfile(env.AGENT_TOOL_PROFILE),
+    ...(modelAllowlist ? { modelAllowlist } : {}),
     securityPosture: securityPostureEnvStrict(env.HARNESS_SECURITY_POSTURE),
     securityScreenBackend,
     ...(securityScreenBackend === "proxy"

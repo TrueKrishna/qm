@@ -136,6 +136,39 @@ test("harness security posture defaults to auto and validates named modes", () =
   );
 });
 
+test("agent tool profile defaults to full and validates coordination mode", () => {
+  assert.equal(loadConfig({}).toolProfile, "full");
+  assert.equal(loadConfig({ AGENT_TOOL_PROFILE: " coordination " }).toolProfile, "coordination");
+  assert.throws(() => loadConfig({ AGENT_TOOL_PROFILE: "coding" }), /AGENT_TOOL_PROFILE="coding" is not recognized/);
+});
+
+test("agent model allowlist is normalized once", () => {
+  assert.equal(loadConfig({}).modelAllowlist, undefined);
+  assert.deepEqual(
+    loadConfig({ HARNESS: "pi", PI_MODEL: "a/model", AGENT_MODEL_ALLOWLIST: " a/model, b/model, a/model " })
+      .modelAllowlist,
+    ["a/model", "b/model"],
+  );
+  assert.throws(
+    () => loadConfig({ HARNESS: "pi", PI_MODEL: "a/model", AGENT_MODEL_ALLOWLIST: "a/model,,b/model" }),
+    /AGENT_MODEL_ALLOWLIST/,
+  );
+  assert.throws(
+    () => loadConfig({ HARNESS: "pi", PI_MODEL: "a/model", AGENT_MODEL_ALLOWLIST: "b/model" }),
+    /must include the configured model/,
+  );
+  assert.throws(
+    () =>
+      loadConfig({
+        HARNESS: "pi",
+        PI_MODEL: "a/model",
+        PI_JUDGE_MODEL: "b/model",
+        AGENT_MODEL_ALLOWLIST: "a/model",
+      }),
+    /PI_JUDGE_MODEL is not enabled by AGENT_MODEL_ALLOWLIST/,
+  );
+});
+
 test("production names a mock harness rather than letting it pass as a real deployment", () => {
   const warnings: string[] = [];
   const original = console.warn;

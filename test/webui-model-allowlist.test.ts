@@ -70,3 +70,141 @@ test("the org allowed-models list restricts the runtime-config picker and cleari
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+test("the deployment model allowlist hides, rejects, and ignores durable alternatives", async () => {
+  const allowed = "deepseek/deepseek-chat-v3.1";
+  const blocked = "anthropic/claude-sonnet-4.5";
+  const modelCredentialFetch: typeof fetch = async () =>
+    Response.json({
+      data: [
+        { id: allowed, name: "DeepSeek: DeepSeek V3.1", supported_parameters: ["tools"] },
+        { id: blocked, name: "Anthropic: Claude Sonnet 4.5", supported_parameters: ["tools"] },
+      ],
+    });
+  const config = testConfig({
+    dataDir: mkdtempSync(join(tmpdir(), "deployment-model-allowlist-")),
+    harness: "pi",
+    modelId: allowed,
+    modelAllowlist: [allowed],
+    openrouterApiKey: "deployment-openrouter-key",
+  });
+  const built = buildApp(config, { modelCredentialFetch });
+  built.config.setApprovedHarnesses(["mock", "pi"]);
+  built.config.setBrowseModel("org:default-org", blocked);
+  await built.config.setRuntimeSelectionLatest("org:default-org", { harnessId: "mock", modelId: allowed });
+  await built.config.setRuntimeSelectionLatest("personal:alice", { harnessId: "pi", modelId: blocked });
+  const server = createInsecureTestServer(built.app, {
+    config: built.config,
+    modelCredentials: built.modelCredentials,
+    modelCredentialFetch,
+    harnessId: "pi",
+    baseModelDefault: allowed,
+    modelAllowlist: [allowed],
+    providerKeys: { anthropic: false, openai: false, openrouter: true },
+    admin: built.admin,
+    auditLog: built.auditLog,
+  });
+  server.listen(0);
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  try {
+    const runtime = await fetch(`${base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`);
+    assert.equal(runtime.status, 200);
+    const body = (await runtime.json()) as {
+      modelsByHarness: Record<string, string[]>;
+      orgDefault: { harnessId: string; modelId: string };
+      scopeOverride: { harnessId: string; modelId: string } | null;
+      effective: { harnessId: string; modelId: string };
+    };
+    assert.deepEqual(Object.keys(body.modelsByHarness), ["pi"]);
+    assert.deepEqual(body.modelsByHarness.pi, [allowed]);
+    assert.equal(body.orgDefault.harnessId, "pi");
+    assert.equal(body.orgDefault.modelId, allowed);
+    assert.equal(body.scopeOverride, null);
+    assert.equal(body.effective.harnessId, "pi");
+    assert.equal(body.effective.modelId, allowed);
+
+    const governance = await fetch(`${base}/v1/admin/scopes/org%3Adefault-org`, { headers: ADMIN });
+    assert.equal(governance.status, 200);
+    const governanceBody = (await governance.json()) as {
+      baseModelOptions: Array<{ id: string }>;
+      approvedHarnesses: string[] | null;
+      browseModel: string | null;
+      harnessOptions: string[];
+      runtime: { harnessId: string; modelId: string } | null;
+      modelsByHarness: Record<string, Array<{ id: string }>>;
+    };
+    assert.deepEqual(
+      governanceBody.baseModelOptions.map((model) => model.id),
+      [allowed],
+    );
+    assert.deepEqual(governanceBody.approvedHarnesses, ["pi"]);
+    assert.equal(governanceBody.browseModel, null);
+    assert.deepEqual(governanceBody.harnessOptions, ["pi"]);
+    assert.equal(governanceBody.runtime, null);
+    assert.deepEqual(Object.keys(governanceBody.modelsByHarness), ["pi"]);
+    assert.deepEqual(
+      governanceBody.modelsByHarness.pi?.map((model) => model.id),
+      [allowed],
+    );
+
+    for (const [resource, payload] of [
+      ["base-model", { modelId: blocked }],
+      ["runtime", { harnessId: "pi", modelId: blocked }],
+      ["runtime", { harnessId: "mock", modelId: allowed }],
+      ["approved-harnesses", { ids: ["mock"] }],
+      ["browse-model", { modelId: blocked }],
+      ["webui-models", { ids: [blocked] }],
+    ] as const) {
+      const rejected = await fetch(`${base}/v1/admin/scopes/org%3Adefault-org/${resource}`, {
+        method: "PUT",
+        headers: ADMIN,
+        body: JSON.stringify(payload),
+      });
+      assert.equal(rejected.status, 400, resource);
+      assert.match(JSON.stringify(await rejected.json()), /not enabled for this deployment/, resource);
+    }
+
+    const changed = await fetch(`${base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ harnessId: "pi", modelId: blocked }),
+    });
+    assert.equal(changed.status, 400);
+    assert.deepEqual(await changed.json(), { error: "model_not_enabled" });
+
+    const changedHarness = await fetch(`${base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ harnessId: "mock", modelId: allowed }),
+    });
+    assert.equal(changedHarness.status, 400);
+    assert.deepEqual(await changedHarness.json(), { error: "harness_not_approved" });
+
+    const turn = await built.app.turn({
+      surface: "web",
+      actor: { externalId: "alice" },
+      conversation: { kind: "dm", threadRef: "web:alice:deployment-model-lock" },
+      text: "hello",
+      model: blocked,
+      async: true,
+    });
+    assert.equal(turn.status, "refused");
+    assert.match(turn.reason ?? "", /not enabled for this deployment/);
+
+    const alternateHarnessTurn = await built.app.turn({
+      surface: "web",
+      actor: { externalId: "alice" },
+      conversation: { kind: "dm", threadRef: "web:alice:deployment-harness-lock" },
+      text: "hello",
+      harness: "mock",
+      model: allowed,
+      async: true,
+    });
+    assert.equal(alternateHarnessTurn.status, "refused");
+    assert.match(alternateHarnessTurn.reason ?? "", /not enabled for this deployment/);
+
+    assert.equal((await built.slackCore.surfaceHeaderFacts("personal:alice")).modelName, allowed);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

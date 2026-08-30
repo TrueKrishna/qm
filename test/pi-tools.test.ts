@@ -944,6 +944,32 @@ test("readOnly assembles ONLY observational tools — no execute/background/writ
   }
 });
 
+test("coordination profile exposes coordination tools without computer or artifact mutation", () => {
+  const ref: ToolContextRef = { current: fakeToolContext(), scopeLabel: "personal:U1" };
+  const tools = createPiTools(ref, {
+    controlTools: true,
+    scratchExec: true,
+    reachExec: true,
+    toolProfile: "coordination",
+  });
+  const names = new Set(tools.map((tool) => tool.name));
+  assert.deepEqual([...names].sort(), ["cron", "finish_silently", "guidance", "history", "memory", "share"]);
+  for (const tool of ["execute", "background", "read", "write", "publish"]) {
+    assert.ok(!names.has(tool), `coordination toolset drops ${tool}`);
+  }
+});
+
+test("coordination profile retains the named surface while dropping computer tools", () => {
+  const ref: ToolContextRef = { current: fakeToolContext(), scopeLabel: "channel:C1" };
+  const names = createPiTools(ref, {
+    surfaceTools: true,
+    surfaceName: "slack",
+    toolProfile: "coordination",
+  }).map((tool) => tool.name);
+  assert.deepEqual(names.sort(), ["guidance", "history", "memory", "slack", "stay_silent"]);
+  assert.ok(!names.includes("execute"));
+});
+
 test("finish_silently on a poll fire terminates the turn at the tool contract; off one it no-ops", async () => {
   const emitted: Emitted[] = [];
   const ref: ToolContextRef = {

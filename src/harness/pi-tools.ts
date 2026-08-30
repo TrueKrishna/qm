@@ -1,6 +1,6 @@
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { CONFIG_DEFAULTS, type Config } from "../config.ts";
+import { CONFIG_DEFAULTS, type AgentToolProfile, type Config } from "../config.ts";
 import type { CronFireLogEntry, EntryType, ScopeId } from "../types.ts";
 import type { ToolContext, PublishInput, PublishAudienceDescriptor, ShareDirective } from "../tools/primitives.ts";
 import type { GapWork } from "../sessions/session-store.ts";
@@ -238,6 +238,7 @@ export interface PiToolsOptions {
   backgroundJobTtlMs?: number;
   backgroundJobTtlMaxMs?: number;
   controlTools?: boolean;
+  toolProfile?: AgentToolProfile;
   readOnly?: boolean;
   surfaceTools?: boolean;
   surfaceName?: string;
@@ -251,6 +252,7 @@ export function coreToolOptions(config: Config): CoreToolOptions {
     ownerAuthExec: config.sharedOwnerAuthIsolation,
     reachExec: config.reachExecEnabled,
     controlTools: Boolean(config.signingSecret && config.apiBaseUrl),
+    toolProfile: config.toolProfile,
     execTimeoutMs: config.execTimeoutDefaultMs,
     execTimeoutCeilingMs: config.execTimeoutMaxMs,
     backgroundJobTtlMs: config.backgroundJobTtlMs,
@@ -259,6 +261,15 @@ export function coreToolOptions(config: Config): CoreToolOptions {
 }
 
 const READ_ONLY_TOOL_NAMES = new Set(["memory", "history", "finish_silently"]);
+const COORDINATION_TOOL_NAMES = new Set([
+  "memory",
+  "history",
+  "cron",
+  "share",
+  "guidance",
+  "stay_silent",
+  "finish_silently",
+]);
 
 export function pauseStampAfterToolCall(
   ref: Pick<ToolContextRef, "pausedOnApproval" | "silentRequested">,
@@ -2406,7 +2417,11 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
     ...(controlTools || surfaceTools ? [guidance] : []),
     ...(surfaceTools ? [surface, staySilent] : [finishSilently]),
   ];
-  const active = opts?.readOnly ? tools.filter((t) => READ_ONLY_TOOL_NAMES.has(t.name)) : tools;
+  let active = tools;
+  if (opts?.readOnly) active = tools.filter((t) => READ_ONLY_TOOL_NAMES.has(t.name));
+  else if (opts?.toolProfile === "coordination") {
+    active = tools.filter((t) => COORDINATION_TOOL_NAMES.has(t.name) || t === surface);
+  }
   return active.map((t) => withToolBodyTiming(withToolApprovalGate(t, ref, { recordCall, recordResult }), ref));
 }
 

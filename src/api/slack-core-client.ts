@@ -106,6 +106,7 @@ export interface SlackCoreClientDeps {
   pickAckEmoji?(text: string, candidates: readonly string[]): Promise<string | undefined>;
   ackPicks?: AckEmojiPickStore;
   ackModelId?: () => string | undefined;
+  modelAllowlist?: readonly string[];
   brandingDefault?: { selfLabel?: string };
 }
 
@@ -133,8 +134,10 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
         resolveRuntimeChoiceDurable(deps.config, orgScope, scope, deps.runtimeFallback),
         deps.config.getBrandingDurable(orgScope),
       ]);
+      const selected =
+        deps.modelAllowlist?.length && !deps.modelAllowlist.includes(choice.modelId) ? deps.runtimeFallback : choice;
       const agentLabel = agentLabelFrom(branding?.selfLabel ?? deps.brandingDefault?.selfLabel);
-      return { ...(agentLabel ? { agentLabel } : {}), modelName: modelDisplayName(choice.modelId) };
+      return { ...(agentLabel ? { agentLabel } : {}), modelName: modelDisplayName(selected.modelId) };
     },
 
     onScopeModelChanged(listener) {

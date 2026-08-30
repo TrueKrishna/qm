@@ -9,7 +9,7 @@ import {
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import { InMemoryCredentialStore, type Api, type Model } from "@earendil-works/pi-ai";
-import { CONFIG_DEFAULTS, type Config } from "../config.ts";
+import { CONFIG_DEFAULTS, type AgentToolProfile, type Config } from "../config.ts";
 
 type LegacyThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 const LEGACY_THINKING_LEVELS = new Set<string>(["off", "minimal", "low", "medium", "high", "xhigh"]);
@@ -94,6 +94,8 @@ export interface PiHarnessOptions {
   ownerAuthExec?: boolean;
   reachExec?: boolean;
   controlTools?: boolean;
+  toolProfile?: AgentToolProfile;
+  modelAllowlist?: readonly string[];
   turnWallClockMs?: number;
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
@@ -114,6 +116,7 @@ export function piHarnessConfigOptions(config: Config): PiHarnessOptions {
     captureRequests: config.piCaptureRequests,
     systemCacheSplit: config.piSystemCacheSplit,
     ...coreToolOptions(config),
+    ...(config.modelAllowlist ? { modelAllowlist: config.modelAllowlist } : {}),
     turnWallClockMs: config.turnWallClockMs,
   };
 }
@@ -1210,16 +1213,22 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       typeof configuredModelId === "function" ? configuredModelId(scope) : configuredModelId,
       opts?.defaultModelId,
     );
-  const auxiliaryModelId = (): string =>
-    auxiliaryModelFor(
-      resolveConfiguredModelId(
-        opts?.resolveBaseModelId?.() ?? (typeof configuredModelId === "string" ? configuredModelId : undefined),
-        opts?.defaultModelId,
-      ),
+  const modelEnabled = (modelId: string): boolean =>
+    !opts?.modelAllowlist?.length || opts.modelAllowlist.includes(modelId);
+  const auxiliaryModelId = (): string => {
+    const base = resolveConfiguredModelId(
+      opts?.resolveBaseModelId?.() ?? (typeof configuredModelId === "string" ? configuredModelId : undefined),
+      opts?.defaultModelId,
     );
-  const detectModelId = (): string => opts?.detectModelId ?? auxiliaryModelId();
-  const titleModelId = (): string => opts?.titleModelId ?? auxiliaryModelId();
-  const judgeModelId = (): string => opts?.judgeModelId ?? auxiliaryModelId();
+    const candidate = auxiliaryModelFor(base);
+    return modelEnabled(candidate) ? candidate : base;
+  };
+  const detectModelId = (): string =>
+    opts?.detectModelId && modelEnabled(opts.detectModelId) ? opts.detectModelId : auxiliaryModelId();
+  const titleModelId = (): string =>
+    opts?.titleModelId && modelEnabled(opts.titleModelId) ? opts.titleModelId : auxiliaryModelId();
+  const judgeModelId = (): string =>
+    opts?.judgeModelId && modelEnabled(opts.judgeModelId) ? opts.judgeModelId : auxiliaryModelId();
   const tempDirPrefix = opts?.tempDirPrefix ?? "pi";
   const configuredProviderKeys: ProviderKeys = opts?.resolveProviderKeys
     ? {}
@@ -1239,6 +1248,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
   const ownerAuthExec = opts?.ownerAuthExec ?? false;
   const reachExec = opts?.reachExec ?? false;
   const controlTools = opts?.controlTools ?? false;
+  const toolProfile = opts?.toolProfile ?? "full";
   const defaultTurnWallClockMs = opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
   const signals = opts?.signals;
   async function createTurnSession(
@@ -1310,6 +1320,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           ownerAuthExec,
           reachExec,
           controlTools,
+          toolProfile,
           ...(surfaceTools ? { surfaceTools: true } : {}),
           ...(surfaceName ? { surfaceName } : {}),
           ...(readOnly ? { readOnly: true } : {}),
@@ -1740,7 +1751,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             const fromId = (entry.agentSession.model as { id?: string } | undefined)?.id;
             const fallbackId = fromId ? refusalFallbackModelId(fromId) : undefined;
             const fallback = fallbackId ? resolveModel(fallbackId) : undefined;
-            if (!fallbackId || !fallback) return false;
+            if (!fallbackId || !fallback || !modelEnabled(fallbackId)) return false;
             const capMs = turnWallClockMs > 0 ? turnWallClockMs - (Date.now() - promptStart) : turnWallClockMs;
             if (turnWallClockMs > 0 && capMs < EMPTY_ENDING_MIN_BUDGET_MS) return false;
             console.error(
@@ -2010,7 +2021,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       async pickAckEmoji(text: string, candidates: readonly string[]): Promise<string | undefined> {
         if (!text.trim() || candidates.length === 0) return undefined;
         const ackModelId = auxiliaryModelForProvider("anthropic");
-        if (!ackModelId) return undefined;
+        if (!ackModelId || !modelEnabled(ackModelId)) return undefined;
         try {
           const model = getRequiredModel(ackModelId);
           const providerKeys = await resolveProviderKeys();

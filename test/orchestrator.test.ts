@@ -663,6 +663,31 @@ test("a stored browse model that no longer resolves falls back to the base model
   assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "anthropic");
 });
 
+test("a deployment model allowlist prevents a stale browse override from reaching the sandbox", async () => {
+  const allowed = "claude-opus-5";
+  const config = testConfig({
+    dataDir: mkdtempSync(join(tmpdir(), "ap-")),
+    signingSecret: "test-secret",
+    apiBaseUrl: "https://core.example.com",
+    modelId: allowed,
+    modelAllowlist: [allowed],
+  });
+  const built = buildApp(config);
+  const { app, sandbox } = built;
+  let captured: ProvisionOptions | undefined;
+  const realProvision = sandbox.provision.bind(sandbox);
+  sandbox.provision = (layers, opts) => {
+    captured = opts;
+    return realProvision(layers, opts);
+  };
+
+  built.config.setBrowseModel("org:default-org", "gpt-5.6-sol");
+  const res = await app.turn(dm("!run echo keys", { conversation: { kind: "dm", threadRef: "dm:U1:locked1" } }));
+  assert.equal(res.status, "ok");
+  assert.equal(captured?.env?.BROWSE_LAB_MODEL, allowed);
+  assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "anthropic");
+});
+
 test("browse follows a live org base model change, not the process-start default", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),

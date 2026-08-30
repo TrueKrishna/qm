@@ -3,7 +3,7 @@ import { sanitizeTitle, TITLE_GENERATION_PROMPT } from "./pi-harness.ts";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
-import { CONFIG_DEFAULTS, type Config } from "../config.ts";
+import { CONFIG_DEFAULTS, type AgentToolProfile, type Config } from "../config.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { DEFAULT_CODEX_MODEL_ID, modelSupportedByHarness } from "../model/pi-models.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
@@ -28,6 +28,7 @@ export interface CodexHarnessOptions {
   ownerAuthExec?: boolean;
   reachExec?: boolean;
   controlTools?: boolean;
+  toolProfile?: AgentToolProfile;
   turnWallClockMs?: number;
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
@@ -227,6 +228,7 @@ function toolOptions(opts: CodexHarnessOptions, turn?: HarnessTurnInput): PiTool
     ownerAuthExec: opts.ownerAuthExec,
     reachExec: opts.reachExec,
     controlTools: opts.controlTools,
+    toolProfile: opts.toolProfile,
     execTimeoutMs: opts.execTimeoutMs,
     execTimeoutCeilingMs: opts.execTimeoutCeilingMs,
     backgroundJobTtlMs: opts.backgroundJobTtlMs,

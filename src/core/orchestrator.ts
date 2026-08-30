@@ -1013,9 +1013,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const browseSteps = deps.config?.getBrowseMaxSteps(toScopeId("org", orgId()));
         if (browseSteps && !("BROWSE_LAB_MAX_STEPS" in connectorEnv))
           connectorEnv.BROWSE_LAB_MAX_STEPS = String(browseSteps);
-        const browseChoice =
-          knownBrowseModel(deps.config?.getBrowseModel(toScopeId("org", orgId()))) ??
-          knownBrowseModel(deps.resolveBaseModelId?.());
+        const storedBrowseModel = deps.config?.getBrowseModel(toScopeId("org", orgId()));
+        const enabledBrowseModel =
+          storedBrowseModel && (!deps.modelAllowlist?.length || deps.modelAllowlist.includes(storedBrowseModel))
+            ? storedBrowseModel
+            : undefined;
+        const browseChoice = knownBrowseModel(enabledBrowseModel) ?? knownBrowseModel(deps.resolveBaseModelId?.());
         if (browseChoice && !("BROWSE_LAB_MODEL" in connectorEnv)) {
           connectorEnv.BROWSE_LAB_MODEL = browseChoice.id;
           connectorEnv.BROWSE_LAB_MODEL_PROVIDER = browseChoice.provider;

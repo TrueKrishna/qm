@@ -95,6 +95,7 @@ export interface OrchestratorDeps {
   resolution: ResolutionService;
   config?: ScopedConfigStore;
   resolveBaseModelId?: () => string | undefined;
+  modelAllowlist?: readonly string[];
   sessionTapeMode?: "shadow" | "serve";
   sessions: SessionStore;
   workspace: WorkspaceStore;

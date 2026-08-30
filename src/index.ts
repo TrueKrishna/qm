@@ -30,6 +30,7 @@ const server = createServer(built.app, {
     configuredModelForHarness(config, config.harness),
     baseModelProviders(config),
   ),
+  ...(config.modelAllowlist ? { modelAllowlist: config.modelAllowlist } : {}),
   modelProviders: modelProviderAvailabilityFor(config.harness, providerKeysPresent(config)),
   providerKeys: providerKeysPresent(config),
   modelCredentials: built.modelCredentials,

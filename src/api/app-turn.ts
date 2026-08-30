@@ -106,6 +106,16 @@ export function createTurnMethods(
       }
 
       if (req.surface === "web") {
+        if (
+          req.harness &&
+          deps.modelAllowlist?.length &&
+          req.harness !== (isHarnessId(deps.harnessId) ? deps.harnessId : "pi")
+        ) {
+          return { status: "refused", reason: "that harness is not enabled for this deployment" };
+        }
+        if (req.model && deps.modelAllowlist?.length && !deps.modelAllowlist.includes(req.model)) {
+          return { status: "refused", reason: "that model is not enabled for this deployment" };
+        }
         const threadRef = req.conversation.threadRef;
         const existing = await deps.sessions.getByThread(threadRef);
         if (existing) {
@@ -145,6 +155,17 @@ export function createTurnMethods(
                   ...(req.model ? { modelId: req.model } : {}),
                 })
               : configuredRuntime;
+          if (deps.modelAllowlist?.length) {
+            if (orgRuntime.harnessId !== runtimeFallback.harnessId || !deps.modelAllowlist.includes(orgRuntime.modelId))
+              orgRuntime = runtimeFallback;
+            if (
+              configuredRuntime.harnessId !== runtimeFallback.harnessId ||
+              !deps.modelAllowlist.includes(configuredRuntime.modelId)
+            )
+              configuredRuntime = runtimeFallback;
+            if (runtime.harnessId !== runtimeFallback.harnessId || !deps.modelAllowlist.includes(runtime.modelId))
+              runtime = runtimeFallback;
+          }
         } catch (error) {
           return { status: "refused", reason: errMessage(error) };
         }
@@ -171,7 +192,9 @@ export function createTurnMethods(
         }
         const configuredWebuiModels = await deps.config.getWebuiModelsDurable(org);
         let enabledWebuiModels: string[] | null = null;
-        if (configuredWebuiModels?.length) {
+        if (deps.modelAllowlist?.length) {
+          enabledWebuiModels = [...deps.modelAllowlist];
+        } else if (configuredWebuiModels?.length) {
           enabledWebuiModels = [...new Set([...configuredWebuiModels, orgRuntime.modelId])];
         } else if (providers?.openrouter) {
           enabledWebuiModels = [
@@ -186,7 +209,7 @@ export function createTurnMethods(
         }
         const invalidModelOption =
           validateWebTurnModelOptions(req, enabledWebuiModels, providers) ??
-          webTurnRuntimeModelRefusal(runtime.modelId, orgRuntime.modelId, configuredWebuiModels);
+          webTurnRuntimeModelRefusal(runtime.modelId, orgRuntime.modelId, deps.modelAllowlist ?? configuredWebuiModels);
         if (invalidModelOption) return { status: "refused", reason: invalidModelOption };
       }
 

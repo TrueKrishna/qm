@@ -7,7 +7,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk";
-import { CONFIG_DEFAULTS, type Config } from "../config.ts";
+import { CONFIG_DEFAULTS, type AgentToolProfile, type Config } from "../config.ts";
 import { isCustomModelId } from "../model/custom-providers.ts";
 import type { CustomProviderSpec } from "../model/custom-providers.ts";
 import { DEFAULT_AGENT_MODEL_ID, resolveModel } from "../model/pi-models.ts";
@@ -37,6 +37,7 @@ export interface OpenCodeHarnessOptions {
   ownerAuthExec?: boolean;
   reachExec?: boolean;
   controlTools?: boolean;
+  toolProfile?: AgentToolProfile;
   turnWallClockMs?: number;
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
@@ -104,6 +105,7 @@ function toolOptions(opts: OpenCodeHarnessOptions, turn?: HarnessTurnInput): PiT
     ownerAuthExec: opts.ownerAuthExec,
     reachExec: opts.reachExec,
     controlTools: opts.controlTools,
+    toolProfile: opts.toolProfile,
     execTimeoutMs: opts.execTimeoutMs,
     execTimeoutCeilingMs: opts.execTimeoutCeilingMs,
     backgroundJobTtlMs: opts.backgroundJobTtlMs,

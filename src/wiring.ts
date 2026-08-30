@@ -728,8 +728,13 @@ export function buildApp(
     };
   };
   const runtimeOrgScope = scopeId("org", config.orgId);
-  const orgBaseModelId = (): string | undefined =>
-    configStore.getRuntimeSelection(runtimeOrgScope)?.modelId ?? configStore.getBaseModel(runtimeOrgScope) ?? undefined;
+  const orgBaseModelId = (): string | undefined => {
+    const stored =
+      configStore.getRuntimeSelection(runtimeOrgScope)?.modelId ??
+      configStore.getBaseModel(runtimeOrgScope) ??
+      undefined;
+    return stored && (!config.modelAllowlist?.length || config.modelAllowlist.includes(stored)) ? stored : undefined;
+  };
   const adapters = new Map<HarnessId, Harness>([
     [
       "pi",
@@ -778,11 +783,25 @@ export function buildApp(
       baseModelProviders(config),
     ),
   };
-  const judgeModelId = (): string => config.judgeModelId ?? auxiliaryModelFor(orgBaseModelId() ?? fallback.modelId);
+  const judgeModelId = (): string => {
+    const candidate = config.judgeModelId ?? auxiliaryModelFor(orgBaseModelId() ?? fallback.modelId);
+    return !config.modelAllowlist?.length || config.modelAllowlist.includes(candidate) ? candidate : fallback.modelId;
+  };
   const harness = createHarnessRouter(adapters, adapters.get(fallbackHarness)!, (input) =>
     resolveRuntimeChoiceDurable(configStore, runtimeOrgScope, input.scopeLabel, fallback, {
       ...(input.harness ? { harnessId: input.harness as HarnessId } : {}),
       ...(input.model ? { modelId: input.model } : {}),
+    }).then((choice) => {
+      if (input.harness && config.modelAllowlist?.length && input.harness !== fallback.harnessId) {
+        throw new Error("that harness is not enabled for this deployment");
+      }
+      if (input.model && config.modelAllowlist?.length && !config.modelAllowlist.includes(input.model)) {
+        throw new Error("that model is not enabled for this deployment");
+      }
+      return config.modelAllowlist?.length &&
+        (choice.harnessId !== fallback.harnessId || !config.modelAllowlist.includes(choice.modelId))
+        ? fallback
+        : choice;
     }),
   );
 
@@ -1000,6 +1019,7 @@ export function buildApp(
     monitors,
     crons,
     resolveBaseModelId: () => orgBaseModelId() ?? fallback.modelId,
+    ...(config.modelAllowlist ? { modelAllowlist: config.modelAllowlist } : {}),
     ...(config.scratchExecEnabled ? { scratchExec: true } : {}),
     ...(config.sharedOwnerAuthIsolation ? { ownerAuthExec: true, sharedOwnerAuthIsolation: true } : {}),
     directory,
@@ -1107,6 +1127,7 @@ export function buildApp(
     tasks,
     modelGateway,
     modelCredentials,
+    ...(config.modelAllowlist ? { modelAllowlist: config.modelAllowlist } : {}),
     customProviders,
     refreshCustomProviders,
     ...(overrides.modelCredentialFetch ? { modelCredentialFetch: overrides.modelCredentialFetch } : {}),
@@ -1158,8 +1179,14 @@ export function buildApp(
     runs,
     turnStream,
     tasks,
+    ...(config.modelAllowlist ? { modelAllowlist: config.modelAllowlist } : {}),
     ackPicks: ackEmojiPicks,
-    ackModelId: () => auxiliaryModelForProvider("anthropic"),
+    ackModelId: () => {
+      const candidate = auxiliaryModelForProvider("anthropic");
+      return candidate && (!config.modelAllowlist?.length || config.modelAllowlist.includes(candidate))
+        ? candidate
+        : undefined;
+    },
     ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
     ...(harness.models.pickAckEmoji ? { pickAckEmoji: (t, c) => harness.models.pickAckEmoji!(t, c) } : {}),
   });

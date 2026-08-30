@@ -357,6 +357,9 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         return { error: "base-model requires { modelId: string } (empty string clears the override)" };
       const modelId = typeof raw === "string" ? raw.trim() : "";
       if (modelId && !resolveModel(modelId)) return { error: `unknown model id: ${modelId}` };
+      if (modelId && ctx.deps.modelAllowlist?.length && !ctx.deps.modelAllowlist.includes(modelId)) {
+        return { error: `model ${modelId} is not enabled for this deployment` };
+      }
       const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
       const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
       const unserviceable = (harness: string): { error: string } | null =>
@@ -366,15 +369,16 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
             }
           : null;
       const runtime = await ctx.deps.config!.getRuntimeSelectionDurable(scope);
+      const deploymentHarness = isHarnessId(ctx.deps.harnessId) ? ctx.deps.harnessId : "pi";
       if (!modelId) await ctx.deps.config!.setRuntimeSelectionLatest(scope, null);
-      else if (runtime) {
+      else if (runtime && !ctx.deps.modelAllowlist?.length) {
         if (!isHarnessId(runtime.harnessId) || !modelSupportedByHarness(modelId, runtime.harnessId))
           return { error: `model ${modelId} is not supported by ${runtime.harnessId}` };
         const bad = unserviceable(runtime.harnessId);
         if (bad) return bad;
         await ctx.deps.config!.setRuntimeSelectionLatest(scope, { harnessId: runtime.harnessId, modelId });
       } else {
-        const harnessId = isHarnessId(ctx.deps.harnessId) ? ctx.deps.harnessId : "pi";
+        const harnessId = deploymentHarness;
         const effective = await resolveRuntimeChoiceDurable(ctx.deps.config!, scopeId("org", configOrgId()), scope, {
           harnessId,
           modelId: defaultModelForHarness(harnessId, ctx.deps.baseModelDefault),
@@ -403,10 +407,17 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const harnessId = (ctx.body as { harnessId?: unknown }).harnessId;
       const modelId = (ctx.body as { modelId?: unknown }).modelId;
       if (!isHarnessId(harnessId)) return { error: `runtime requires harnessId (${HARNESS_IDS.join(" | ")})` };
+      const deploymentHarness = isHarnessId(ctx.deps.harnessId) ? ctx.deps.harnessId : "pi";
+      if (ctx.deps.modelAllowlist?.length && harnessId !== deploymentHarness) {
+        return { error: `harness ${harnessId} is not enabled for this deployment` };
+      }
       const approved = (await ctx.deps.config!.getApprovedHarnessesDurable()) ?? [ctx.deps.harnessId ?? "pi"];
       if (!approved.includes(harnessId)) return { error: `harness ${harnessId} is not approved` };
       if (typeof modelId !== "string" || !modelSupportedByHarness(modelId, harnessId))
         return { error: `model ${String(modelId)} is not supported by ${harnessId}` };
+      if (ctx.deps.modelAllowlist?.length && !ctx.deps.modelAllowlist.includes(modelId)) {
+        return { error: `model ${modelId} is not enabled for this deployment` };
+      }
       const runtimeKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
       if (!modelServiceable(modelId, modelProviderAvailabilityFor(harnessId, runtimeKeys)))
         return {
@@ -423,9 +434,12 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     clearable: true,
     readKey: "approvedHarnesses",
     enumValues: HARNESS_IDS,
-    get: (deps) => deps.config!.getApprovedHarnesses(),
+    get: (deps) =>
+      deps.modelAllowlist?.length
+        ? [isHarnessId(deps.harnessId) ? deps.harnessId : "pi"]
+        : deps.config!.getApprovedHarnesses(),
     apply: generic(
-      (body, { scope }) => {
+      (body, { scope, deps }) => {
         const bad = orgOnly(scope, "approved harnesses are org-wide");
         if (bad) return bad;
         const raw = (body as { ids?: unknown }).ids;
@@ -433,6 +447,10 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         if (raw.some((id) => !isHarnessId(id)))
           return { error: `unknown harness (expected ${HARNESS_IDS.join(" | ")})` };
         const ids = [...new Set(raw.filter(isHarnessId))];
+        const deploymentHarness = isHarnessId(deps.harnessId) ? deps.harnessId : "pi";
+        if (deps.modelAllowlist?.length && (ids.length !== 1 || ids[0] !== deploymentHarness)) {
+          return { error: `that harness selection is not enabled for this deployment; use ${deploymentHarness}` };
+        }
         return { value: ids.length ? ids : null };
       },
       (deps, _scope, ids) => deps.config!.setApprovedHarnesses(ids),
@@ -449,7 +467,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     enumValues: SELECTABLE_BASE_MODELS,
     get: (deps, scope) => deps.config!.getWebuiModels(scope),
     apply: generic<string[] | null>(
-      (body, { scope }) => {
+      (body, { scope, deps }) => {
         const bad = orgOnly(scope, "the web UI model picker is org-wide");
         if (bad) return bad;
         const raw = (body as { ids?: unknown }).ids;
@@ -458,6 +476,11 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         }
         const ids = Array.isArray(raw) ? raw.map((v) => (typeof v === "string" ? v.trim() : "")).filter(Boolean) : [];
         for (const id of ids) if (!resolveModel(id)) return { error: `unknown model id: ${id}` };
+        for (const id of ids) {
+          if (deps.modelAllowlist?.length && !deps.modelAllowlist.includes(id)) {
+            return { error: `model ${id} is not enabled for this deployment` };
+          }
+        }
         const seen = new Set<string>();
         const unique = ids.filter((id) => (seen.has(id) ? false : (seen.add(id), true)));
         return { value: unique.length ? unique : null };
@@ -552,7 +575,10 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       "The model driving the browser agent in the browse skill, org-wide (empty follows the deployment's base model; fast mode applies only on Opus models).",
     readKey: "browseModel",
     enumValues: SELECTABLE_BASE_MODELS,
-    get: (deps, scope) => deps.config!.getBrowseModel(scope),
+    get: (deps, scope) => {
+      const stored = deps.config!.getBrowseModel(scope);
+      return stored && (!deps.modelAllowlist?.length || deps.modelAllowlist.includes(stored)) ? stored : null;
+    },
     apply: async (ctx, _actor, scope) => {
       const bad = orgOnly(scope, "the browse model is org-wide");
       if (bad) return bad;
@@ -562,6 +588,9 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       }
       const modelId = typeof raw === "string" ? raw.trim() : "";
       if (modelId && !resolveModel(modelId)) return { error: `unknown model id: ${modelId}` };
+      if (modelId && ctx.deps.modelAllowlist?.length && !ctx.deps.modelAllowlist.includes(modelId)) {
+        return { error: `model ${modelId} is not enabled for this deployment` };
+      }
       const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
       const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
       const providers = modelProviderAvailabilityFor(ctx.deps.harnessId ?? "pi", configuredKeys, managedKeys);

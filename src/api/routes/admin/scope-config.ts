@@ -5,6 +5,7 @@ import {
   HARNESS_IDS,
   SELECTABLE_BASE_MODELS,
   defaultModelForHarness,
+  isHarnessId,
   modelProviderAvailabilityFor,
   modelServiceable,
   ALL_PROVIDERS_AVAILABLE,
@@ -223,6 +224,30 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
   for (const r of ADMIN_RESOURCES) {
     if (r.readKey && r.get) values[r.readKey] = await r.get(deps, targetScope);
   }
+  if (deps.modelAllowlist?.length) {
+    const deploymentHarness = isHarnessId(deps.harnessId) ? deps.harnessId : "pi";
+    const runtime = values.runtime as { harnessId?: unknown; modelId?: unknown } | null | undefined;
+    if (
+      runtime &&
+      (runtime.harnessId !== deploymentHarness ||
+        typeof runtime.modelId !== "string" ||
+        !deps.modelAllowlist.includes(runtime.modelId))
+    ) {
+      values.runtime = null;
+    }
+    values.approvedHarnesses = [deploymentHarness];
+    if (typeof values.browseModel === "string" && !deps.modelAllowlist.includes(values.browseModel)) {
+      values.browseModel = null;
+    }
+    if (typeof values.baseModel === "string" && !deps.modelAllowlist.includes(values.baseModel)) {
+      values.baseModel = null;
+    }
+    if (Array.isArray(values.webuiModels)) {
+      values.webuiModels = values.webuiModels.filter(
+        (model): model is string => typeof model === "string" && deps.modelAllowlist!.includes(model),
+      );
+    }
+  }
   const declaredEgress = deps.egressDeclaredEnforcement ?? deps.egressEnforcement ?? "none";
   const effectiveEgressFidelity = deps.egressEnforcement ?? "none";
   let egressReason = "ready";
@@ -250,6 +275,7 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
   const currentModel =
     runtime &&
     typeof runtime.modelId === "string" &&
+    (!deps.modelAllowlist?.length || deps.modelAllowlist.includes(runtime.modelId)) &&
     (currentProvider === "anthropic" || currentProvider === "openai" || currentProvider === "openrouter")
       ? ({ id: runtime.modelId, name: resolvedCurrent!.name, provider: currentProvider } satisfies ModelCatalogEntry)
       : null;
@@ -257,8 +283,15 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
     const models = selectableCatalogForHarness(catalog, harnessId);
     if (currentModel && runtime?.harnessId === harnessId && !models.some((model) => model.id === currentModel.id))
       models.push(currentModel);
-    return models.filter((model) => modelServiceable(model.id, providersFor(harnessId)));
+    return models.filter(
+      (model) =>
+        modelServiceable(model.id, providersFor(harnessId)) &&
+        (!deps.modelAllowlist?.length || deps.modelAllowlist.includes(model.id)),
+    );
   };
+  const harnessOptions = deps.modelAllowlist?.length
+    ? [isHarnessId(deps.harnessId) ? deps.harnessId : "pi"]
+    : HARNESS_IDS.filter((id) => id !== "mock");
   return sendJson(res, 200, {
     scopeId: targetScope,
     ...values,
@@ -268,10 +301,12 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
     baseModelDefault: defaultModelForHarness(deps.harnessId ?? "pi", deps.baseModelDefault),
     baseModelOptions: modelsFor(deps.harnessId ?? "pi"),
     harnessDefault: deps.harnessId ?? "pi",
-    harnessOptions: HARNESS_IDS.filter((id) => id !== "mock"),
-    modelsByHarness: Object.fromEntries(HARNESS_IDS.map((id) => [id, modelsFor(id)])),
-    browseModelOptions: SELECTABLE_BASE_MODELS.filter((m) =>
-      modelServiceable(m.id, providersFor(deps.harnessId ?? "pi")),
+    harnessOptions,
+    modelsByHarness: Object.fromEntries(harnessOptions.map((id) => [id, modelsFor(id)])),
+    browseModelOptions: SELECTABLE_BASE_MODELS.filter(
+      (model) =>
+        modelServiceable(model.id, providersFor(deps.harnessId ?? "pi")) &&
+        (!deps.modelAllowlist?.length || deps.modelAllowlist.includes(model.id)),
     ),
     egressEnforcement: {
       backend: deps.sandboxBackend ?? "unknown",

@@ -15,7 +15,7 @@ import {
   type SpawnedProcess,
 } from "@anthropic-ai/claude-agent-sdk";
 import { fromJSONSchema, type ZodObject } from "zod";
-import { CONFIG_DEFAULTS, type Config } from "../config.ts";
+import { CONFIG_DEFAULTS, type AgentToolProfile, type Config } from "../config.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import {
   contextTokenBudgetForModel,
@@ -51,6 +51,7 @@ export interface ClaudeHarnessOptions {
   ownerAuthExec?: boolean;
   reachExec?: boolean;
   controlTools?: boolean;
+  toolProfile?: AgentToolProfile;
   turnWallClockMs?: number;
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
@@ -194,6 +195,7 @@ function toolOptions(opts: ClaudeHarnessOptions, turn?: HarnessTurnInput): PiToo
     ownerAuthExec: opts.ownerAuthExec,
     reachExec: opts.reachExec,
     controlTools: opts.controlTools,
+    toolProfile: opts.toolProfile,
     execTimeoutMs: opts.execTimeoutMs,
     execTimeoutCeilingMs: opts.execTimeoutCeilingMs,
     backgroundJobTtlMs: opts.backgroundJobTtlMs,

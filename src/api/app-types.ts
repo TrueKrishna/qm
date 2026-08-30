@@ -506,6 +506,7 @@ export interface AppDeps {
   harnessId?: string;
   modelProviders?: ModelProviderAvailability;
   providerKeys?: ModelProviderAvailability;
+  modelAllowlist?: readonly string[];
   runtimeFallback?: RuntimeChoice;
 }
 
